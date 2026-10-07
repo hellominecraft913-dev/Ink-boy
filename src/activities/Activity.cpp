@@ -1,6 +1,8 @@
 #include "Activity.h"
 
 #include "ActivityManager.h"
+
+#include <FsHelpers.h>
 #include "CrossPointState.h"
 #include "GlobalActions.h"
 #include "KOReaderCredentialStore.h"
@@ -16,7 +18,15 @@ RequestUpdateResult Activity::requestUpdateAndWait() { return activityManager.re
 
 void Activity::onGoHome(HomeMenuItem item) { activityManager.goHome(item); }
 
-void Activity::onSelectBook(const std::string& path) { activityManager.goToReader(path); }
+void Activity::onSelectBook(const std::string& path) {
+#if CROSSINK_GAMEBOY
+  if (FsHelpers::checkFileExtension(path, ".gb")) {
+    activityManager.goToGameBoy(path);
+    return;
+  }
+#endif
+  activityManager.goToReader(path);
+}
 
 void Activity::startActivityForResult(std::unique_ptr<Activity>&& activity, ActivityResultHandler resultHandler) {
   this->resultHandler = std::move(resultHandler);

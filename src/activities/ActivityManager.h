@@ -156,6 +156,9 @@ class ActivityManager {
   bool goToOpdsServer(uint32_t serverIndex, bool networkBootReady = false);
   void goToReader(std::string path, bool suppressBackRelease = false, bool allowFastInitialRefresh = false,
                   bool cleanImageBaseOnEntry = false);
+#if CROSSINK_GAMEBOY
+  void goToGameBoy(std::string path);
+#endif
   void goToReaderAndRunMenuAction(std::string path, uint8_t action);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();

@@ -117,9 +117,14 @@ bool hasFileMetadata(const std::string& path) {
 }
 
 bool isSupportedBrowserFile(std::string_view filename) {
-  return FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
-         FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
-         FsHelpers::hasBmpExtension(filename) || FsHelpers::hasPngExtension(filename);
+  const bool common = FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+                      FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
+                      FsHelpers::hasBmpExtension(filename) || FsHelpers::hasPngExtension(filename);
+#if CROSSINK_GAMEBOY
+  return common || FsHelpers::checkFileExtension(filename, ".gb");
+#else
+  return common;
+#endif
 }
 
 bool acceptCommon(const char* name, bool isDir) {
