@@ -2,7 +2,7 @@ This is a simple fork of https://github.com/uxjulia/crossink with https://github
 
 This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devices as it will likely brick them
 
-## Installation
+# Installation
 
 1. Download the latest firmware.bin from the Releases page.
    
@@ -17,7 +17,7 @@ This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devi
 
 Simply drop your DMG rom into your books folder after flashing, then click on it, simple!
 
-# Development
+### Development
 
 to develop you need PlatformIO
 
@@ -35,7 +35,7 @@ pio run -e x4-pro
 ```
 
 
-# Highlights
+### Highlights
 
 - New reader fonts: Lexend Deca and Bitter.
 - Music notation and selected supplemental Unicode glyph support to be able to render Project Hail Mary accurately.
