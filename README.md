@@ -13,11 +13,11 @@ This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devi
 4. Click the ROM to launch the emulator.
 
 
-# How to use
+## How to use
 
 Simply drop your DMG rom into your books folder after flashing, then click on it, simple!
 
-### Development
+# Development
 
 to develop you need PlatformIO
 
@@ -35,7 +35,7 @@ pio run -e x4-pro
 ```
 
 
-### Highlights
+# Highlights
 
 - New reader fonts: Lexend Deca and Bitter.
 - Music notation and selected supplemental Unicode glyph support to be able to render Project Hail Mary accurately.
