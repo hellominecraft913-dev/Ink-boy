@@ -21,9 +21,19 @@ Simply drop your DMG rom into your books folder after flashing, then click on it
 
 to develop you need PlatformIO
 
+Run:
+
 ```sh
 git clone --recurse-submodules https://github.com/hellominecraft-dev/Ink-boy
 ```
+
+Then build the firmware using the correct environment. typically the command is:
+
+
+```sh
+pio run -e x4-pro
+```
+
 
 ### Highlights
 
