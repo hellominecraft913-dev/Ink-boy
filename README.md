@@ -17,6 +17,14 @@ This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devi
 
 Simply drop your DMG rom into your books folder after flashing, then click on it, simple!
 
+### Development
+
+to develop you need PlatformIO
+
+```sh
+git clone --recurse-submodules https://github.com/hellominecraft-dev/Ink-boy
+```
+
 ### Highlights
 
 - New reader fonts: Lexend Deca and Bitter.
