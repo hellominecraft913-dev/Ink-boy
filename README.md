@@ -24,7 +24,7 @@ to develop you need PlatformIO
 Run:
 
 ```sh
-git clone --recurse-submodules https://github.com/hellominecraft-dev/Ink-boy
+git clone --recurse-submodules https://github.com/hellominecraft913-dev/Ink-boy
 ```
 
 Then build the firmware using the correct environment. typically the command is:
