@@ -1,4 +1,4 @@
-This is a simple fork of https://github.com/uxjulia/crossink with https://github.com/deltabeard/peanut-gb integrated into it
+This is a simple fork of Crossink with gameboy/gameboy color emulators integrated into it
 
 This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devices as it will likely brick them
 
@@ -8,14 +8,14 @@ This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devi
    
 2. Flash it using a web flasher / SD card
    
-3. Drop your DMG ROM into the /Books folder.
+3. Drop your Gameboy/Gameboy color ROM into the /Books folder.
    
 4. Click the ROM to launch the emulator.
 
 
 ## How to use
 
-Simply drop your DMG rom into your books folder after flashing, then click on it, simple!
+Simply drop your Gameboy/Gameboy color rom into your books folder after flashing, then click on it, simple!
 
 ### Development
 
