@@ -6,6 +6,7 @@
 #include <string>
 
 #include "activities/Activity.h"
+#include "walnut_cgb_port.h"
 
 #if CROSSINK_GAMEBOY
 extern "C" {
@@ -59,7 +60,11 @@ class GameBoyActivity final : public Activity {
   std::string tempSavePath;
   std::string backupSavePath;
 
+  // Peanut-GB is used for .gb; Walnut-CGB is isolated behind a C API for .gbc.
   gb_s* gb = nullptr;
+  WalnutCgbContext* cgb = nullptr;
+  bool usesCgbCore = false;
+  bool cartRamOwnedByCgb = false;
   uint8_t* rom = nullptr;
   size_t romSize = 0;
   uint8_t* cartRam = nullptr;
@@ -125,6 +130,8 @@ class GameBoyActivity final : public Activity {
   static void cartRamWrite(gb_s* gb, uint_fast32_t addr, uint8_t value);
   static void lcdDrawLine(gb_s* gb, const uint8_t* pixels, uint_fast8_t line);
   static void fatalError(gb_s* gb, enum gb_error_e error, uint16_t addr);
+  static void cgbLcdDrawLine(void* user, const uint8_t* monochromePixels, uint_fast8_t line);
+  static void cgbFatalError(void* user, int errorCode, uint16_t addr);
   void writeGameBoyLine(const uint8_t* pixels, uint_fast8_t line);
 
   static bool isBatteryBackedCart(uint8_t type);

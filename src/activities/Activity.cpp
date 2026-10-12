@@ -20,7 +20,7 @@ void Activity::onGoHome(HomeMenuItem item) { activityManager.goHome(item); }
 
 void Activity::onSelectBook(const std::string& path) {
 #if CROSSINK_GAMEBOY
-  if (FsHelpers::checkFileExtension(path, ".gb")) {
+  if (FsHelpers::checkFileExtension(path, ".gb") || FsHelpers::checkFileExtension(path, ".gbc")) {
     activityManager.goToGameBoy(path);
     return;
   }

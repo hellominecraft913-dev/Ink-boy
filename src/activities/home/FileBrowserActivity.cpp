@@ -121,7 +121,8 @@ bool isSupportedBrowserFile(std::string_view filename) {
                       FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
                       FsHelpers::hasBmpExtension(filename) || FsHelpers::hasPngExtension(filename);
 #if CROSSINK_GAMEBOY
-  return common || FsHelpers::checkFileExtension(filename, ".gb");
+  return common || FsHelpers::checkFileExtension(filename, ".gb") ||
+         FsHelpers::checkFileExtension(filename, ".gbc");
 #else
   return common;
 #endif
