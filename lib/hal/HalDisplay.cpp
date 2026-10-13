@@ -106,6 +106,16 @@ void HalDisplay::displayBufferAsync(HalDisplay::RefreshMode mode) {
 
 void HalDisplay::waitRefreshComplete() { einkDisplay.waitRefreshComplete(); }
 
+void HalDisplay::displayBufferOverlapped(HalDisplay::RefreshMode mode) {
+  HalSpiBus::Lock spiLock;
+  einkDisplay.displayBufferAsyncNoShadow(convertRefreshMode(mode));
+}
+
+void HalDisplay::finishOverlapped() {
+  HalSpiBus::Lock spiLock;
+  einkDisplay.waitRefreshComplete();
+}
+
 bool HalDisplay::supportsAsyncRefresh() const { return einkDisplay.supportsAsyncRefresh(); }
 
 HalDisplay::GrayscaleCapabilities HalDisplay::grayscaleCapabilities(GrayscaleMode mode) const {
