@@ -114,3 +114,8 @@ CrossInk runs on an ESP32-C3 with limited RAM, so very large folders or complex 
 
 ---
 
+# Conturbutions
+
+This firmware is based on [Crossink](https://github.com/uxjulia/CrossInk/). The gameboy emulator used is [Peanut-GB](https://github.com/deltabeard/Peanut-GB) and the gameboy color emulator is [Walnut-CGB](https://github.com/Mr-PauI/Walnut-CGB). 
+
+I would also like to thank [Thebitsworld](https://github.com/thebitsworld) for providing the custom LUT that makes games playable and for being a reliable tester of the firmware
