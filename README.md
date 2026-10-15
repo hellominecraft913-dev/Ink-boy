@@ -1,3 +1,8 @@
+> [!WARNING]
+> This project uses a custom waveform LUT that drives the e-ink panel outside of its normal operating parameters. It may cause permanent damage to your display. Use at your own risk — I take no responsibility for any damage caused.
+> 
+
+
 This is a simple fork of Crossink with gameboy/gameboy color emulators integrated into it
 
 This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devices as it will likely brick them
