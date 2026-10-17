@@ -3,7 +3,7 @@
 > 
 
 
-This is a simple fork of Crossink with gameboy/gameboy color emulators integrated into it
+This is a fork of Crossink with gameboy/gameboy color/NES emulators integrated into it
 
 This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devices as it will likely brick them
 
@@ -13,14 +13,14 @@ This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devi
    
 2. Flash it using a web flasher / SD card
    
-3. Drop your Gameboy/Gameboy color ROM into the /Books folder.
+3. Drop your Gameboy/Gameboy color/NES ROM into the /Books folder.
    
 4. Click the ROM to launch the emulator.
 
 
 ## How to use
 
-Simply drop your Gameboy/Gameboy color rom into your books folder after flashing, then click on it, simple!
+Simply drop your Gameboy/Gameboy color/NES rom into your books folder after flashing, then click on it, simple!
 
 ### Development
 
