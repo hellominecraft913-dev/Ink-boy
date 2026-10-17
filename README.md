@@ -1,3 +1,8 @@
+> [!WARNING]
+> This project uses a custom waveform LUT that drives the e-ink panel outside of its normal operating parameters. It increases the refresh rate by roughly 2.5 times and may shorten the displays lifespan. I take no responsibility for any damage caused. If you wish to be on the safe side turn off the fast refresh rate in settings
+> 
+
+
 This is a simple fork of Crossink with gameboy/gameboy color emulators integrated into it
 
 This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devices as it will likely brick them
