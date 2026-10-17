@@ -28,6 +28,9 @@
 #if CROSSINK_GAMEBOY
 #include "gameboy/GameBoyActivity.h"
 #endif
+#if CROSSINK_AGNES
+#include "nes/NESActivity.h"
+#endif
 #include "home/AlertActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
@@ -1020,6 +1023,19 @@ void ActivityManager::goToGameBoy(std::string path) {
     return;
   }
   // Push so GameBoyActivity::finish() returns directly to the File Browser.
+  pushActivity(std::move(activity));
+}
+#endif
+#if CROSSINK_AGNES
+void ActivityManager::goToNES(std::string path) {
+  auto activity =
+      makeUniqueNoThrow<NESActivity>(renderer, mappedInput, std::move(path));
+
+  if (!activity) {
+    LOG_ERR("ACT", "OOM opening NES activity");
+    return;
+  }
+
   pushActivity(std::move(activity));
 }
 #endif

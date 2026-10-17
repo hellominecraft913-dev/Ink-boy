@@ -116,16 +116,28 @@ bool hasFileMetadata(const std::string& path) {
          FsHelpers::hasMarkdownExtension(path);
 }
 
+
 bool isSupportedBrowserFile(std::string_view filename) {
-  const bool common = FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
-                      FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
-                      FsHelpers::hasBmpExtension(filename) || FsHelpers::hasPngExtension(filename);
+  const bool common = FsHelpers::hasEpubExtension(filename) ||
+                      FsHelpers::hasXtcExtension(filename) ||
+                      FsHelpers::hasTxtExtension(filename) ||
+                      FsHelpers::hasMarkdownExtension(filename) ||
+                      FsHelpers::hasBmpExtension(filename) ||
+                      FsHelpers::hasPngExtension(filename);
+
+  bool emulatorRom = false;
+
 #if CROSSINK_GAMEBOY
-  return common || FsHelpers::checkFileExtension(filename, ".gb") ||
-         FsHelpers::checkFileExtension(filename, ".gbc");
-#else
-  return common;
+  emulatorRom = FsHelpers::checkFileExtension(filename, ".gb") ||
+                FsHelpers::checkFileExtension(filename, ".gbc");
 #endif
+
+#if CROSSINK_AGNES
+  emulatorRom = emulatorRom ||
+                FsHelpers::checkFileExtension(filename, ".nes");
+#endif
+
+  return common || emulatorRom;
 }
 
 bool acceptCommon(const char* name, bool isDir) {
