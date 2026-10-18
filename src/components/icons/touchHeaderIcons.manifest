@@ -1,0 +1,6 @@
+# Touch-only header controls. Regenerate with:
+# python3 scripts/generate_icons.py --library lucide \
+#   --manifest src/components/icons/touchHeaderIcons.manifest \
+#   --sizes 32 --stroke-width 3 \
+#   --out src/components/icons/touchHeaderIcons.h
+back = chevron-left

@@ -1,0 +1,5 @@
+# python3 scripts/generate_icons.py --library lucide --manifest src/components/icons/libraryIcons.manifest --sizes 32 --out src/components/icons/libraryIcons.h
+arrow-down-wide-narrow = arrow-down-wide-narrow
+arrow-up-narrow-wide = arrow-up-narrow-wide
+refresh-cw = refresh-cw
+ellipsis-vertical = ellipsis-vertical

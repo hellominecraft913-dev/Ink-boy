@@ -1,0 +1,39 @@
+# Manifest for src/components/icons/listIcons.h — regenerate with:
+#   python3 scripts/generate_icons.py --library lucide \
+#     --manifest src/components/icons/listIcons.manifest \
+#     --sizes 24,32 --out src/components/icons/listIcons.h
+# then clang-format -i the output.
+folder = folder
+file-text = file-text
+image = image
+book-open = book-open
+book = book
+book-marked = book-marked
+file = file
+wifi = wifi
+lyra-library = library-big
+landmark = landmark
+radio-tower = radio-tower
+history = history
+lyra-settings = settings-2
+cog = cog
+case-sensitive = case-sensitive
+text-align-start = text-align-start
+bookmark = bookmark
+ellipsis = ellipsis
+transfer = arrow-left-right
+usb = usb
+lyra-transfer = send-horizontal
+chevrons-left-right-ellipsis = chevrons-left-right-ellipsis
+menu = menu
+home = house
+search = search
+chevron-up = chevron-up
+chevron-down = chevron-down
+arrow-up = arrow-up
+arrow-down = arrow-down
+sliders-horizontal = sliders-horizontal
+arrows-up = chevrons-up
+arrows-down = chevrons-down
+arrows-left = chevrons-left
+arrows-right = chevrons-right
