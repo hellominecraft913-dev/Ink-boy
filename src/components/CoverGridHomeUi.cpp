@@ -227,17 +227,28 @@ void CoverGridHomeUi::drawGrid(UiScreen& screen) {
 }
 
 void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
-  static constexpr const freeink::Icon* ICONS[] = {&icon_folder_32, &icon_landmark_32, &icon_lyra_library_32,
-                                                   &icon_lyra_transfer_32, &icon_lyra_settings_32};
+  static constexpr const freeink::Icon* ICONS[] = {
+      &icon_folder_32,          // Browse Files
+      &icon_file_32,            // Emulator
+      &icon_landmark_32,        // Library
+      &icon_lyra_library_32,    // OPDS
+      &icon_lyra_transfer_32,   // File Transfer
+      &icon_lyra_settings_32,   // Settings
+  };
+
   int count = 0;
-  for (int i = 0; i < 5; ++i) {
-    if (i == 2 && !hasOpds) continue;
+
+  for (int i = 0; i < 6; ++i) {
+    // Hide the OPDS tab if no OPDS servers are configured.
+    if (i == 3 && !hasOpds) continue;
+
     auto& tab = tabItems[count];
     tab.value = books->size() + count;
     tab.selected = selected == tab.value;
     tab.label = nullptr;
     ++count;
   }
+
   tabs.tabs = tabItems.data();
   tabs.count = count;
   tabs.layout = fui::TabBarLayout::SpaceBetween;
@@ -245,17 +256,29 @@ void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
   tabs.inputMask = fui::InputTouch;
   tabs.iconSize = 32;
   tabs.iconPainterUserData = this;
-  tabs.iconPainter = [](fui::DrawTarget&, fui::Rect iconRect, const fui::TabItem& tab, uint8_t, void* user) {
+
+  tabs.iconPainter = [](fui::DrawTarget&, fui::Rect iconRect,
+                        const fui::TabItem& tab, uint8_t, void* user) {
     const auto& self = *static_cast<CoverGridHomeUi*>(user);
+
     const int index = tab.value - static_cast<int>(self.books->size());
-    const int icon = !self.hasOpds && index >= 2 ? index + 1 : index;
-    drawLucideIcon(self.renderer, *ICONS[icon], iconRect.x, iconRect.y);
+
+    // When OPDS is hidden, skip its icon in the icon array.
+    const int icon =
+        !self.hasOpds && index >= 3 ? index + 1 : index;
+
+    drawLucideIcon(self.renderer, *ICONS[icon],
+                   iconRect.x, iconRect.y);
     return true;
   };
-  tabs.tabStyles.normal.background = fui::Paint::solid(fui::Color::White);
-  tabs.tabStyles.selected.background = fui::Paint::solid(fui::Color::White);
+
+  tabs.tabStyles.normal.background =
+      fui::Paint::solid(fui::Color::White);
+  tabs.tabStyles.selected.background =
+      fui::Paint::solid(fui::Color::White);
   tabs.selectedUnderline = 2;
   tabs.distributedSlotWidth = 0;
+
   fui::tabBar(screen.frame(), rect, tabs);
 }
 

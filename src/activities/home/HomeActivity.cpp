@@ -55,6 +55,7 @@ constexpr int HOME_BOOK_SWAP_RECENT_COUNT = 2;
 
 enum class HomeMenuAction {
   BrowseFiles,
+  Emulator,
   ContinueReading,
   Library,
   OpdsBrowser,
@@ -71,7 +72,7 @@ struct HomeMenuEntry {
 };
 
 struct HomeMenuEntries {
-  static constexpr int kCapacity = 8;
+  static constexpr int kCapacity = 10;
   std::array<HomeMenuEntry, kCapacity> entries{};
   int count = 0;
 
@@ -236,7 +237,8 @@ const char* savedItemsLabel(bool hasBookmarks, bool hasClippings) {
 void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasReadingStats, bool hasBookmarks,
                          bool hasClippings) {
   items.push({tr(STR_BROWSE_FILES), Folder, HomeMenuAction::BrowseFiles});
-  items.push({tr(STR_LIBRARY), Library, HomeMenuAction::Library});
+items.push({"Emulator", Folder, HomeMenuAction::Emulator});
+items.push({tr(STR_LIBRARY), Library, HomeMenuAction::Library});
 
   if (hasOpdsServers) {
     items.push({tr(STR_OPDS_BROWSER), Opds, HomeMenuAction::OpdsBrowser});
@@ -265,6 +267,8 @@ HomeMenuEntries buildMinimalMenuItems(bool hasOpdsServers, bool hasReadingStats,
   } else {
     items.push({tr(STR_LIBRARY), Library, HomeMenuAction::Library});
   }
+
+    items.push({"Emulator", Folder, HomeMenuAction::Emulator});
 
   if (hasOpdsServers) {
     items.push({tr(STR_OPDS_BROWSER), Opds, HomeMenuAction::OpdsBrowser});
@@ -529,9 +533,9 @@ static_assert(HomeActivity::kMaxCachedBooks >= LyraCarouselMetrics::values.homeR
               "kMaxCachedBooks must cover all carousel slots");
 
 int HomeActivity::getMenuItemCount() const {
-  if (coverGridUi) return static_cast<int>(recentBooks.size()) + (hasOpdsServers ? 5 : 4);
+  if (coverGridUi) return static_cast<int>(recentBooks.size()) + (hasOpdsServers ? 6 : 5);
   const auto& metrics = UITheme::getInstance().getMetrics();
-  int count = 4;  // File Browser, Library, File transfer, Settings
+  int count = 5;  // File Browser, Emulator, Library, File transfer, Settings
   if (!metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
     count += getVisibleRecentBookCount();
   } else if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
@@ -885,16 +889,16 @@ void HomeActivity::onEnter() {
         selectorIndex = base;
         break;
       case HomeMenuItem::LIBRARY:
-        selectorIndex = base + 1;
-        break;
-      case HomeMenuItem::OPDS_BROWSER:
         selectorIndex = base + 2;
         break;
+      case HomeMenuItem::OPDS_BROWSER:
+        selectorIndex = base + 3;
+        break;
       case HomeMenuItem::FILE_TRANSFER:
-        selectorIndex = base + (hasOpdsServers ? 3 : 2);
+        selectorIndex = base + (hasOpdsServers ? 4 : 3);
         break;
       case HomeMenuItem::SETTINGS_MENU:
-        selectorIndex = base + (hasOpdsServers ? 4 : 3);
+        selectorIndex = base + (hasOpdsServers ? 5 : 4);
         break;
       case HomeMenuItem::NONE:
         break;
@@ -1402,7 +1406,7 @@ void HomeActivity::loop() {
     }
 
     const int bookCount = static_cast<int>(recentBooks.size());
-    const int tabCount = hasOpdsServers ? 5 : 4;
+    const int tabCount = hasOpdsServers ? 6 : 5;
     const auto cycleBand = [this](const int base, const int count, const int dir) {
       if (count <= 0) return;
       const int current = selectorIndex - base;
@@ -1459,6 +1463,9 @@ void HomeActivity::loop() {
         switch (menuItems[minimalMenuIndex].action) {
           case HomeMenuAction::BrowseFiles:
             onFileBrowserOpen();
+            break;
+          case HomeMenuAction::Emulator:
+            onEmulatorOpen();
             break;
           case HomeMenuAction::Library:
             onLibraryOpen();
@@ -1701,6 +1708,9 @@ void HomeActivity::loop() {
     switch (action) {
       case HomeMenuAction::BrowseFiles:
         onFileBrowserOpen();
+        break;
+      case HomeMenuAction::Emulator:
+        onEmulatorOpen();
         break;
       case HomeMenuAction::ContinueReading:
         onContinueReading();
@@ -1973,36 +1983,44 @@ void HomeActivity::loop() {
   }
 }
 
+
 void HomeActivity::activateCoverGridSelection() {
   if (selectorIndex < 0) return;
   if (selectorIndex < static_cast<int>(recentBooks.size())) {
     onSelectBook(recentBooks[selectorIndex].path);
     return;
   }
+
   const int tab = selectorIndex - static_cast<int>(recentBooks.size());
+
   switch (tab) {
     case 0:
       onFileBrowserOpen();
       break;
     case 1:
-      onLibraryOpen();
+      onEmulatorOpen();
       break;
     case 2:
+      onLibraryOpen();
+      break;
+    case 3:
       if (hasOpdsServers) {
         onOpdsBrowserOpen();
       } else {
         onFileTransferOpen();
       }
       break;
-    case 3:
+    case 4:
       if (hasOpdsServers) {
         onFileTransferOpen();
       } else {
         onSettingsOpen();
       }
       break;
-    case 4:
-      if (hasOpdsServers) onSettingsOpen();
+    case 5:
+      if (hasOpdsServers) {
+        onSettingsOpen();
+      }
       break;
   }
 }
@@ -2313,6 +2331,27 @@ void HomeActivity::onMinimalBrowseOpen() {
 }
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
+
+
+void HomeActivity::onEmulatorOpen() {
+  static constexpr const char* directories[] = {
+      "/Emulator",
+      "/Emulator/Game Boy",
+      "/Emulator/Game Boy Color",
+      "/Emulator/NES",
+  };
+
+  // Create the parent first, then its three console folders.
+  for (const char* path : directories) {
+    if (!Storage.exists(path) && !Storage.mkdir(path)) {
+      LOG_ERR("HOME", "Failed to create emulator directory: %s", path);
+    }
+  }
+
+  // Open the existing browser at the Emulator folder.
+  activityManager.goToFileBrowser("/Emulator");
+}
+
 
 void HomeActivity::onContinueReading() {
   if (recentBooks.empty()) return;
