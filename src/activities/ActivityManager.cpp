@@ -31,6 +31,9 @@
 #if CROSSINK_AGNES
 #include "nes/NESActivity.h"
 #endif
+#if CROSSINK_GBA
+#include "gba/GbaActivity.h"
+#endif
 #include "home/AlertActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
@@ -1040,6 +1043,20 @@ void ActivityManager::goToNES(std::string path) {
 }
 #endif
 
+#if CROSSINK_GBA
+void ActivityManager::goToGBA(std::string path) {
+  auto activity =
+      makeUniqueNoThrow<GbaActivity>(
+          renderer, mappedInput, std::move(path));
+
+  if (!activity) {
+    LOG_ERR("ACT", "OOM opening GBA activity");
+    return;
+  }
+
+  pushActivity(std::move(activity));
+}
+#endif
 
 void ActivityManager::goToReaderAndRunMenuAction(std::string path, const uint8_t action) {
   pendingReaderMenuAction = action;

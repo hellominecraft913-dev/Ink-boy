@@ -118,23 +118,30 @@ bool hasFileMetadata(const std::string& path) {
 
 
 bool isSupportedBrowserFile(std::string_view filename) {
-  const bool common = FsHelpers::hasEpubExtension(filename) ||
-                      FsHelpers::hasXtcExtension(filename) ||
-                      FsHelpers::hasTxtExtension(filename) ||
-                      FsHelpers::hasMarkdownExtension(filename) ||
-                      FsHelpers::hasBmpExtension(filename) ||
-                      FsHelpers::hasPngExtension(filename);
+  const bool common =
+      FsHelpers::hasEpubExtension(filename) ||
+      FsHelpers::hasXtcExtension(filename) ||
+      FsHelpers::hasTxtExtension(filename) ||
+      FsHelpers::hasMarkdownExtension(filename) ||
+      FsHelpers::hasBmpExtension(filename) ||
+      FsHelpers::hasPngExtension(filename);
 
   bool emulatorRom = false;
 
 #if CROSSINK_GAMEBOY
-  emulatorRom = FsHelpers::checkFileExtension(filename, ".gb") ||
-                FsHelpers::checkFileExtension(filename, ".gbc");
+  emulatorRom = emulatorRom ||
+      FsHelpers::checkFileExtension(filename, ".gb") ||
+      FsHelpers::checkFileExtension(filename, ".gbc");
 #endif
 
 #if CROSSINK_AGNES
   emulatorRom = emulatorRom ||
-                FsHelpers::checkFileExtension(filename, ".nes");
+      FsHelpers::checkFileExtension(filename, ".nes");
+#endif
+
+#if CROSSINK_GBA
+  emulatorRom = emulatorRom ||
+      FsHelpers::checkFileExtension(filename, ".gba");
 #endif
 
   return common || emulatorRom;

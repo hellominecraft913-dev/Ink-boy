@@ -34,6 +34,13 @@ void Activity::onSelectBook(const std::string& path) {
   }
 #endif
 
+#if CROSSINK_GBA
+  if (FsHelpers::checkFileExtension(path, ".gba")) {
+    activityManager.goToGBA(path);
+    return;
+  }
+#endif
+
   activityManager.goToReader(path);
 }
 
