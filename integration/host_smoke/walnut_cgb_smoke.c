@@ -22,7 +22,7 @@ static void draw(void *user, const uint8_t *pixels, uint_fast8_t line) {
 
 static void die(void *user, int code, uint16_t address) {
   (void)user;
-  fprintf(stderr, "Walnut-CGB fatal error=%d at 0x%04X\n", code, address);
+  fprintf(stderr, "Walnut-CGB fatal error=%d at 0x%04X\\n", code, address);
   abort();
 }
 
@@ -61,17 +61,18 @@ static void test_color_conversion(void) {
       }
     }
   }
+  /* Renderer convention: shade 0 is white; shade 3 is black. */
   for (y = 0; y < 2; ++y) {
     for (x = 0; x < 2; ++x) {
-      assert(walnut_cgb_rgb565_to_bw(0x0000, x, y) == 0);
-      assert(walnut_cgb_rgb565_to_bw(0xFFFF, x, y) == 3);
+      assert(walnut_cgb_rgb565_to_bw(0x0000, x, y) == 3);
+      assert(walnut_cgb_rgb565_to_bw(0xFFFF, x, y) == 0);
     }
   }
   /* Mid-gray should use the ordered pattern, not pass gray through. */
-  assert(walnut_cgb_rgb565_to_bw(0x8410, 0, 0) == 3);
-  assert(walnut_cgb_rgb565_to_bw(0x8410, 1, 0) == 0);
-  assert(walnut_cgb_rgb565_to_bw(0x8410, 0, 1) == 0);
-  assert(walnut_cgb_rgb565_to_bw(0x8410, 1, 1) == 3);
+  assert(walnut_cgb_rgb565_to_bw(0x8410, 0, 0) == 0);
+  assert(walnut_cgb_rgb565_to_bw(0x8410, 1, 0) == 3);
+  assert(walnut_cgb_rgb565_to_bw(0x8410, 0, 1) == 3);
+  assert(walnut_cgb_rgb565_to_bw(0x8410, 1, 1) == 0);
 }
 
 int main(void) {
@@ -97,7 +98,7 @@ int main(void) {
 
   ctx = walnut_cgb_create(rom, rom_size, draw, die, NULL, &init_result);
   if (!ctx) {
-    fprintf(stderr, "Walnut-CGB create failed: %d\n", init_result);
+    fprintf(stderr, "Walnut-CGB create failed: %d\\n", init_result);
     free(rom);
     return 2;
   }
@@ -106,7 +107,7 @@ int main(void) {
   for (i = 0; i < 3; ++i) walnut_cgb_run_frame(ctx);
   assert(lines > 0);
   assert(invalid_values == 0);
-  printf("Walnut-CGB smoke OK: %u scanlines, output strictly black/white, save=%zu\n",
+  printf("Walnut-CGB smoke OK: %u scanlines, output strictly black/white, save=%zu\\n",
          lines, walnut_cgb_save_size(ctx));
   walnut_cgb_destroy(ctx);
   free(rom);
