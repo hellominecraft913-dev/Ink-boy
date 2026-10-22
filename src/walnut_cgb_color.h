@@ -14,13 +14,15 @@ static inline uint8_t walnut_cgb_rgb565_to_luminance(uint16_t color) {
 }
 
 /*
- * Ordered 2x2 Bayer dithering. The only possible outputs are 0 (black) and
- * 3 (white), matching GameBoyActivity's bit-packed monochrome framebuffer.
+ * Ordered 2x2 Bayer dithering. GameBoyActivity uses shade 0 for white and
+ * shade 3 for black, so bright luminance must emit 0 and dark luminance 3.
+ * The callback only emits these endpoint shades; midtones become a spatial
+ * mix of black and white according to the Bayer threshold.
  */
 static inline uint8_t walnut_cgb_luminance_to_bw(uint8_t luminance, uint_fast8_t x, uint_fast8_t y) {
   static const uint8_t bayer[2][2] = {{0, 2}, {3, 1}};
   const uint16_t threshold = (uint16_t)(((uint16_t)(2U * bayer[y & 1U][x & 1U] + 1U) * 255U) / 8U);
-  return luminance > threshold ? 3U : 0U;
+  return luminance > threshold ? 0U : 3U;
 }
 
 static inline uint8_t walnut_cgb_rgb565_to_bw(uint16_t color, uint_fast8_t x, uint_fast8_t y) {
