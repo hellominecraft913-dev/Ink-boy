@@ -8,9 +8,9 @@
 
 ## Monochrome conversion for the e-ink panel
 
-Walnut-CGB writes palette-index pixels on its LCD callback. In CGB mode, the low six bits select one of Walnut-CGB's 64 RGB565 palette entries (`gb->cgb.fixPalette`). The bridge converts RGB565 to 8-bit luminance using `Y = (299R + 587G + 114B) / 1000`, then applies a 2x2 Bayer threshold. Every emitted pixel is exactly `0` (black) or `3` (white), matching the GameBoyActivity framebuffer convention and ensuring color data never reaches the 1-bit CrossInk panel framebuffer. The 2x2 pattern preserves approximate average brightness at the cost of some visible stippling. DMG-compatible ROMs opened with the CGB core use their four shade values as luminance input to the same monochrome dither.
+Walnut-CGB writes palette-index pixels on its LCD callback. In CGB mode, the low six bits select one of Walnut-CGB's 64 RGB565 palette entries (`gb->cgb.fixPalette`). The bridge converts RGB565 to 8-bit luminance using `Y = (299R + 587G + 114B) / 1000`, then applies a 2x2 Bayer threshold. The emitted shades follow the shared renderer's convention: `0` is white and `3` is black. Bright colors therefore map to white, dark colors to black, and midtones become an ordered black/white pattern. The same convention applies when DMG-compatible ROMs use their four shade values as luminance input.
 
-The Game Boy render path scales each source pixel by nearest-neighbor expansion; at the native scale of 3x the 2x2 dither pattern is visible as a small ordered pattern.
+The previous conversion returned `3` for bright pixels and `0` for dark pixels, reversing black and white in the renderer. The conversion helper and host smoke test now assert the correct polarity. The Game Boy render path scales each source pixel by nearest-neighbor expansion; at the native scale of 3x the 2x2 dither pattern is visible as a small ordered pattern.
 
 ## Why a C bridge is used
 
@@ -22,4 +22,4 @@ Peanut-GB and Walnut-CGB share C types and public symbol names (`struct gb_s`, `
 
 ## Testing
 
-A host-side smoke test should validate that a synthetic CGB ROM initializes, frame callbacks arrive, and every callback pixel is either `0` or `3`. The ESP32-S3 PlatformIO build and physical panel/touch test still need to be performed in a Windows/PlatformIO environment with CrossInk's `freeink-sdk` submodule initialized.
+The host-side smoke test checks that a synthetic CGB ROM initializes, emits scanlines containing only valid shade values, and maps RGB565 black to shade `3` and white to shade `0`. The ESP32-S3 PlatformIO build and physical panel/touch test still need to be performed in a Windows/PlatformIO environment with CrossInk's `freeink-sdk` submodule initialized.
