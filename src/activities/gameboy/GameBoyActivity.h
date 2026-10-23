@@ -15,6 +15,7 @@
 #include <string>
 
 #include "activities/Activity.h"
+#include "walnut_cgb_port.h"
 
 #if CROSSINK_GAMEBOY
 extern "C" {
@@ -92,6 +93,10 @@ class GameBoyActivity final : public Activity {
   size_t romSize = 0;
   uint8_t* cartRam = nullptr;
   size_t cartRamSize = 0;
+
+  // Peanut-GB handles .gb. Walnut-CGB handles .gbc.
+WalnutCgbContext* cgb = nullptr;
+bool useWalnutCgb = false;
 
   // CrossInk renders on a separate task. Peanut-GB writes one completed
   // Game Boy frame while the render task consumes the previous completed frame.
@@ -232,6 +237,16 @@ class GameBoyActivity final : public Activity {
   static void fatalError(gb_s* gb, enum gb_error_e error, uint16_t addr);
   void writeGameBoyLine(const uint8_t* pixels, uint_fast8_t line);
 
+  static void walnutLcdDrawLine(
+    void* user,
+    const uint8_t* pixels,
+    uint_fast8_t line);
+
+static void walnutFatalError(
+    void* user,
+    int errorCode,
+    uint16_t address);
+    
   static bool isBatteryBackedCart(uint8_t type);
   static size_t romBankCountFromCode(uint8_t code);
   static const char* initErrorString(int error);
