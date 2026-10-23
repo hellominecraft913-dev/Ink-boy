@@ -1094,23 +1094,23 @@ if (nextFrameUs == 0) {
       break;
     }
 
-    const uint64_t frameStartUs = nowMicros();
-    gb_run_frame(gb);
+        const uint64_t frameStartUs = nowMicros();
+
     if (useWalnutCgb) {
-  if (!cgb) {
-    LOG_ERR(TAG, "Walnut-CGB selected but context is null");
-    break;
-  }
+      if (!cgb) {
+        LOG_ERR(TAG, "Walnut-CGB selected but context is null");
+        break;
+      }
 
-  walnut_cgb_run_frame(cgb);
-} else {
-  if (!gb) {
-    LOG_ERR(TAG, "Peanut-GB selected but context is null");
-    break;
-  }
+      walnut_cgb_run_frame(cgb);
+    } else {
+      if (!gb) {
+        LOG_ERR(TAG, "Peanut-GB selected but context is null");
+        break;
+      }
 
-  gb_run_frame(gb);
-}
+      gb_run_frame(gb);
+    }
 
     const uint32_t frameUs = static_cast<uint32_t>(nowMicros() - frameStartUs);
     perfEmuUs += frameUs;

@@ -19,24 +19,10 @@ RequestUpdateResult Activity::requestUpdateAndWait() { return activityManager.re
 void Activity::onGoHome(HomeMenuItem item) { activityManager.goHome(item); }
 
 void Activity::onSelectBook(const std::string& path) {
-#if CROSSINK_AGNES
-  if (FsHelpers::checkFileExtension(path, ".nes")) {
-    activityManager.goToNES(path);
-    return;
-  }
-#endif
-
 #if CROSSINK_GAMEBOY
   if (FsHelpers::checkFileExtension(path, ".gb") ||
       FsHelpers::checkFileExtension(path, ".gbc")) {
     activityManager.goToGameBoy(path);
-    return;
-  }
-#endif
-
-#if CROSSINK_GBA
-  if (FsHelpers::checkFileExtension(path, ".gba")) {
-    activityManager.goToGBA(path);
     return;
   }
 #endif

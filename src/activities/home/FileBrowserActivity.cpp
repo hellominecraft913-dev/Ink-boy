@@ -134,16 +134,6 @@ bool isSupportedBrowserFile(std::string_view filename) {
       FsHelpers::checkFileExtension(filename, ".gbc");
 #endif
 
-#if CROSSINK_AGNES
-  emulatorRom = emulatorRom ||
-      FsHelpers::checkFileExtension(filename, ".nes");
-#endif
-
-#if CROSSINK_GBA
-  emulatorRom = emulatorRom ||
-      FsHelpers::checkFileExtension(filename, ".gba");
-#endif
-
   return common || emulatorRom;
 }
 

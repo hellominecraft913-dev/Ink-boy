@@ -159,12 +159,6 @@ class ActivityManager {
 #if CROSSINK_GAMEBOY
   void goToGameBoy(std::string path);
 #endif
-#if CROSSINK_AGNES
-  void goToNES(std::string path);
-#endif
-#if CROSSINK_GBA
-  void goToGBA(std::string path);
-#endif
   void goToReaderAndRunMenuAction(std::string path, uint8_t action);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
