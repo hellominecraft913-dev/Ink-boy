@@ -98,6 +98,9 @@ class HomeActivity final : public Activity {
 
   void onSelectBook(const std::string& path);
   void onFileBrowserOpen();
+#if CROSSINK_GAMEBOY
+  void onGameLibraryOpen();
+#endif
   void onMinimalBrowseOpen();
   void onContinueReading();
   void onLibraryOpen();

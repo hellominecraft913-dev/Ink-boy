@@ -55,6 +55,7 @@ constexpr int HOME_BOOK_SWAP_RECENT_COUNT = 2;
 
 enum class HomeMenuAction {
   BrowseFiles,
+  GameLibrary,
   ContinueReading,
   Library,
   OpdsBrowser,
@@ -236,6 +237,9 @@ const char* savedItemsLabel(bool hasBookmarks, bool hasClippings) {
 void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasReadingStats, bool hasBookmarks,
                          bool hasClippings) {
   items.push({tr(STR_BROWSE_FILES), Folder, HomeMenuAction::BrowseFiles});
+#if CROSSINK_GAMEBOY
+  items.push({tr(STR_GAME_LIBRARY), Book, HomeMenuAction::GameLibrary});
+#endif
   items.push({tr(STR_LIBRARY), Library, HomeMenuAction::Library});
 
   if (hasOpdsServers) {
@@ -265,6 +269,9 @@ HomeMenuEntries buildMinimalMenuItems(bool hasOpdsServers, bool hasReadingStats,
   } else {
     items.push({tr(STR_LIBRARY), Library, HomeMenuAction::Library});
   }
+#if CROSSINK_GAMEBOY
+  items.push({tr(STR_GAME_LIBRARY), Book, HomeMenuAction::GameLibrary});
+#endif
 
   if (hasOpdsServers) {
     items.push({tr(STR_OPDS_BROWSER), Opds, HomeMenuAction::OpdsBrowser});
@@ -294,6 +301,8 @@ HomeMenuAction homeActionForInitialMenuItem(HomeMenuItem item) {
   switch (item) {
     case HomeMenuItem::FILE_BROWSER:
       return HomeMenuAction::BrowseFiles;
+    case HomeMenuItem::GAME_LIBRARY:
+      return HomeMenuAction::GameLibrary;
     case HomeMenuItem::LIBRARY:
       return HomeMenuAction::Library;
     case HomeMenuItem::OPDS_BROWSER:
@@ -529,9 +538,16 @@ static_assert(HomeActivity::kMaxCachedBooks >= LyraCarouselMetrics::values.homeR
               "kMaxCachedBooks must cover all carousel slots");
 
 int HomeActivity::getMenuItemCount() const {
+#if CROSSINK_GAMEBOY
+  if (coverGridUi) return static_cast<int>(recentBooks.size()) + (hasOpdsServers ? 6 : 5);
+#else
   if (coverGridUi) return static_cast<int>(recentBooks.size()) + (hasOpdsServers ? 5 : 4);
+#endif
   const auto& metrics = UITheme::getInstance().getMetrics();
   int count = 4;  // File Browser, Library, File transfer, Settings
+#if CROSSINK_GAMEBOY
+  count++;  // Game Library
+#endif
   if (!metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
     count += getVisibleRecentBookCount();
   } else if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
@@ -884,6 +900,23 @@ void HomeActivity::onEnter() {
       case HomeMenuItem::FILE_BROWSER:
         selectorIndex = base;
         break;
+#if CROSSINK_GAMEBOY
+      case HomeMenuItem::GAME_LIBRARY:
+        selectorIndex = base + 1;
+        break;
+      case HomeMenuItem::LIBRARY:
+        selectorIndex = base + 2;
+        break;
+      case HomeMenuItem::OPDS_BROWSER:
+        selectorIndex = base + 3;
+        break;
+      case HomeMenuItem::FILE_TRANSFER:
+        selectorIndex = base + (hasOpdsServers ? 4 : 3);
+        break;
+      case HomeMenuItem::SETTINGS_MENU:
+        selectorIndex = base + (hasOpdsServers ? 5 : 4);
+        break;
+#else
       case HomeMenuItem::LIBRARY:
         selectorIndex = base + 1;
         break;
@@ -896,6 +929,7 @@ void HomeActivity::onEnter() {
       case HomeMenuItem::SETTINGS_MENU:
         selectorIndex = base + (hasOpdsServers ? 4 : 3);
         break;
+#endif
       case HomeMenuItem::NONE:
         break;
     }
@@ -1402,7 +1436,11 @@ void HomeActivity::loop() {
     }
 
     const int bookCount = static_cast<int>(recentBooks.size());
+#if CROSSINK_GAMEBOY
+    const int tabCount = hasOpdsServers ? 6 : 5;
+#else
     const int tabCount = hasOpdsServers ? 5 : 4;
+#endif
     const auto cycleBand = [this](const int base, const int count, const int dir) {
       if (count <= 0) return;
       const int current = selectorIndex - base;
@@ -1459,6 +1497,11 @@ void HomeActivity::loop() {
         switch (menuItems[minimalMenuIndex].action) {
           case HomeMenuAction::BrowseFiles:
             onFileBrowserOpen();
+            break;
+          case HomeMenuAction::GameLibrary:
+#if CROSSINK_GAMEBOY
+            onGameLibraryOpen();
+#endif
             break;
           case HomeMenuAction::Library:
             onLibraryOpen();
@@ -1701,6 +1744,11 @@ void HomeActivity::loop() {
     switch (action) {
       case HomeMenuAction::BrowseFiles:
         onFileBrowserOpen();
+        break;
+      case HomeMenuAction::GameLibrary:
+#if CROSSINK_GAMEBOY
+        onGameLibraryOpen();
+#endif
         break;
       case HomeMenuAction::ContinueReading:
         onContinueReading();
@@ -1984,26 +2032,40 @@ void HomeActivity::activateCoverGridSelection() {
     case 0:
       onFileBrowserOpen();
       break;
+#if CROSSINK_GAMEBOY
+    case 1:
+      onGameLibraryOpen();
+      break;
+    case 2:
+      onLibraryOpen();
+      break;
+    case 3:
+      if (hasOpdsServers) onOpdsBrowserOpen();
+      else onFileTransferOpen();
+      break;
+    case 4:
+      if (hasOpdsServers) onFileTransferOpen();
+      else onSettingsOpen();
+      break;
+    case 5:
+      if (hasOpdsServers) onSettingsOpen();
+      break;
+#else
     case 1:
       onLibraryOpen();
       break;
     case 2:
-      if (hasOpdsServers) {
-        onOpdsBrowserOpen();
-      } else {
-        onFileTransferOpen();
-      }
+      if (hasOpdsServers) onOpdsBrowserOpen();
+      else onFileTransferOpen();
       break;
     case 3:
-      if (hasOpdsServers) {
-        onFileTransferOpen();
-      } else {
-        onSettingsOpen();
-      }
+      if (hasOpdsServers) onFileTransferOpen();
+      else onSettingsOpen();
       break;
     case 4:
       if (hasOpdsServers) onSettingsOpen();
       break;
+#endif
   }
 }
 
@@ -2311,6 +2373,10 @@ void HomeActivity::onMinimalBrowseOpen() {
     onFileBrowserOpen();
   }
 }
+
+#if CROSSINK_GAMEBOY
+void HomeActivity::onGameLibraryOpen() { activityManager.goToGameLibrary(); }
+#endif
 
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 

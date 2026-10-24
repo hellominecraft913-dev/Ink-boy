@@ -27,6 +27,7 @@
 #include "components/TouchRegistry.h"
 #if CROSSINK_GAMEBOY
 #include "gameboy/GameBoyActivity.h"
+#include "GameLibraryActivity.h"
 #endif
 #include "home/AlertActivity.h"
 #include "home/CrashActivity.h"
@@ -954,6 +955,17 @@ void ActivityManager::goToSettings(const bool dismissOnUpSwipe) {
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
 }
+
+#if CROSSINK_GAMEBOY
+void ActivityManager::goToGameLibrary() {
+  auto activity = makeUniqueNoThrow<GameLibraryActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM opening Game Library activity");
+    return;
+  }
+  pushActivity(std::move(activity));
+}
+#endif
 
 void ActivityManager::goToLibrary() {
   auto library = makeUniqueNoThrow<LibraryActivity>(renderer, mappedInput);
