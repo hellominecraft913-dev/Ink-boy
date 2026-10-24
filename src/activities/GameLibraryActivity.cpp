@@ -265,28 +265,32 @@ size_t GameLibraryActivity::screenItemCount() const {
 void GameLibraryActivity::openBluetoothScreen(bool& beginScan) {
   screen = Screen::Bluetooth;
   selectedIndex = 0;
+  visibleStart = 0;
   settings.bluetoothEnabled = 1;
   saveGameBoyUserSettings(settings);
   beginScan = true;
 }
 
 void GameLibraryActivity::refreshBluetooth() {
+  char nextStatus[sizeof(status)] = {};
 #if INKBOY_HAS_BLE_HID
   if (BleHid.isStopping() && !BleHid.end(1000)) {
-    std::snprintf(status, sizeof(status), "Bluetooth is still shutting down");
-    requestUpdate();
-    return;
+    std::snprintf(nextStatus, sizeof(nextStatus), "Bluetooth is still shutting down");
+  } else if (!BleHid.isRunning() && !BleHid.begin("Ink-boy")) {
+    std::snprintf(nextStatus, sizeof(nextStatus), "Bluetooth initialization failed");
+  } else {
+    BleHid.startScan(8000);
+    std::snprintf(nextStatus, sizeof(nextStatus), "Scanning for BLE HID controllers...");
   }
-  if (!BleHid.isRunning() && !BleHid.begin("Ink-boy")) {
-    std::snprintf(status, sizeof(status), "Bluetooth initialization failed");
-    requestUpdate();
-    return;
-  }
-  BleHid.startScan(8000);
-  std::snprintf(status, sizeof(status), "Scanning for BLE HID controllers...");
 #else
-  std::snprintf(status, sizeof(status), "BLE HID is available in the X4 Pro hardware build only");
+  std::snprintf(nextStatus, sizeof(nextStatus), "BLE HID is available in the X4 Pro hardware build only");
 #endif
+  // BLE APIs run outside RenderLock. Publish status only while drawing is excluded.
+  {
+    RenderLock lock(*this);
+    std::strncpy(status, nextStatus, sizeof(status) - 1);
+    status[sizeof(status) - 1] = '\0';
+  }
   requestUpdate();
 }
 
@@ -307,10 +311,12 @@ void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginS
         filter = selectedIndex == 0 ? Filter::All : (selectedIndex == 1 ? Filter::Favorites : Filter::Recent);
         screen = Screen::Games;
         selectedIndex = 0;
+        visibleStart = 0;
         rebuildVisibleGames();
       } else if (selectedIndex == 3) {
         screen = Screen::Settings;
         selectedIndex = 0;
+        visibleStart = 0;
       } else {
         openBluetoothScreen(beginScan);
       }
@@ -376,19 +382,33 @@ void GameLibraryActivity::loop() {
 #if INKBOY_HAS_BLE_HID
   if (BleHid.isRunning()) {
     BleHid.poll();
+    char nextStatus[sizeof(status)] = {};
     char failure[48] = {};
+    bool statusEvent = false;
     if (BleHid.takeConnectFailure(failure, sizeof(failure))) {
-      std::snprintf(status, sizeof(status), "Connect failed: %.45s", failure);
-      requestUpdate();
+      std::snprintf(nextStatus, sizeof(nextStatus), "Connect failed: %.45s", failure);
+      statusEvent = true;
     }
     uint32_t passkey = 0;
     if (BleHid.takePairingPasskey(passkey)) {
-      std::snprintf(status, sizeof(status), "Pairing code: %06lu", static_cast<unsigned long>(passkey));
-      requestUpdate();
+      std::snprintf(nextStatus, sizeof(nextStatus), "Pairing code: %06lu", static_cast<unsigned long>(passkey));
+      statusEvent = true;
     }
-    if (BleHid.isConnected() && std::strncmp(status, "Connected", 9) != 0) {
-      std::snprintf(status, sizeof(status), "Connected: %.31s", BleHid.connectedName());
-      requestUpdate();
+    if (!statusEvent && BleHid.isConnected()) {
+      std::snprintf(nextStatus, sizeof(nextStatus), "Connected: %.31s", BleHid.connectedName());
+      statusEvent = true;
+    }
+    if (statusEvent) {
+      bool changed = false;
+      {
+        RenderLock lock(*this);
+        changed = std::strncmp(status, nextStatus, sizeof(status)) != 0;
+        if (changed) {
+          std::strncpy(status, nextStatus, sizeof(status) - 1);
+          status[sizeof(status) - 1] = '\0';
+        }
+      }
+      if (changed) requestUpdate();
     }
   }
 #endif
@@ -433,6 +453,7 @@ void GameLibraryActivity::loop() {
       } else {
         screen = Screen::Categories;
         selectedIndex = 0;
+        visibleStart = 0;
         changed = true;
       }
     } else if (mappedInput.wasReleased(Button::Up) && count > 0) {
