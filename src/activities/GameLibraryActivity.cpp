@@ -279,7 +279,7 @@ size_t GameLibraryActivity::screenItemCount() const {
     case Screen::Categories: return 7;
     case Screen::Games: return visibleGames.size();
     case Screen::GameActions: return 2;
-    case Screen::Settings: return 7;
+    case Screen::Settings: return 8;
 #if INKBOY_HAS_BLE_HID
     case Screen::Bluetooth: return static_cast<size_t>(BleHid.deviceCount()) + 2;
 #else
@@ -436,6 +436,7 @@ void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginS
         case 6:
           openControllerMapping();
           return;
+        case 7: settings.showGameTitle = settings.showGameTitle == 0 ? 1 : 0; break;
       }
       saveGameBoyUserSettings(settings, settingsForCgb);
       std::snprintf(status, sizeof(status), "Settings saved");
@@ -794,6 +795,8 @@ void GameLibraryActivity::render(RenderLock&&) {
                        (settings.bluetoothEnabled ? tr(STR_ON) : tr(STR_OFF)));
       labels.push_back(tr(STR_GAME_MANAGE_CONTROLLER));
       labels.push_back(tr(STR_GAME_MAP_CONTROLLER));
+      labels.push_back(std::string(tr(STR_GAME_SHOW_TITLE)) + ": " +
+                       (settings.showGameTitle ? tr(STR_ON) : tr(STR_OFF)));
       count = labels.size();
       selectedLocal = selectedIndex;
       break;

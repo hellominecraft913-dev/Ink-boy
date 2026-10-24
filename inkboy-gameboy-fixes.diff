@@ -1,0 +1,274 @@
+diff --git a/lib/I18n/translations/english.yaml b/lib/I18n/translations/english.yaml
+index d14ce1a..5c7a8aa 100644
+--- a/lib/I18n/translations/english.yaml
++++ b/lib/I18n/translations/english.yaml
+@@ -982,6 +982,7 @@ STR_GAME_DISCONNECT: "Disconnect Controller"
+ STR_GAME_NOT_CONNECTED: "Not connected"
+ STR_GAME_BLE_X4PRO_ONLY: "BLE HID is only available on X4 Pro"
+ STR_GAME_MAP_CONTROLLER: "Map Controller Buttons"
++STR_GAME_SHOW_TITLE: "Show Game Title"
+ STR_GAME_WAITING_INPUT: "Waiting for input"
+ STR_GAME_SAVE_MANAGER: "Save Deletion"
+ STR_GAME_SAVE_ACTION: "Manage save"
+diff --git a/src/activities/GameBoySettingsStore.h b/src/activities/GameBoySettingsStore.h
+index 336cf27..2f7700b 100644
+--- a/src/activities/GameBoySettingsStore.h
++++ b/src/activities/GameBoySettingsStore.h
+@@ -12,6 +12,7 @@ struct GameBoyUserSettings {
+   uint8_t refresh = 0;
+   uint8_t touchControls = 1;
+   uint8_t bluetoothEnabled = 0;
++  uint8_t showGameTitle = 1;
+   // HID keyboard usage IDs: Up, Down, Left, Right, A, B, Start, Select.
+   std::array<uint8_t, 8> controllerUsages{{0x52, 0x51, 0x50, 0x4F, 0x1B, 0x1D, 0x28, 0x29}};
+ };
+@@ -21,21 +22,23 @@ inline bool loadGameBoyUserSettings(GameBoyUserSettings& settings, const bool co
+   const char* path = colorEmulator ? "/.crosspoint/game_settings_gbc.bin" : "/.crosspoint/game_settings.bin";
+   if (!Storage.openFileForRead("GBSET", path, file)) return false;
+ 
+-  uint8_t bytes[17] = {};
++  uint8_t bytes[18] = {};
+   const int count = file.read(bytes, sizeof(bytes));
+   file.close();
+ 
+-  // V1 used 8 bytes, V2 adds Bluetooth enable, and V3 appends 8 HID usages.
++  // V1 used 8 bytes, V2 adds Bluetooth enable, V3 adds HID usages, and V4 adds title visibility.
+   if (count < 8 || bytes[0] != 'I' || bytes[1] != 'B' || bytes[2] != 'G' || bytes[3] != 'S' ||
+-      bytes[4] < 1 || bytes[4] > 3 || (bytes[4] == 3 && count < 17)) {
++      bytes[4] < 1 || bytes[4] > 4 || (bytes[4] >= 3 && count < 17) ||
++      (bytes[4] >= 4 && count < 18)) {
+     return false;
+   }
+   settings.layout = bytes[5] <= 1 ? bytes[5] : 0;
+   settings.refresh = bytes[6] <= 2 ? bytes[6] : 0;
+   settings.touchControls = bytes[7] <= 1 ? bytes[7] : 1;
+   settings.bluetoothEnabled = bytes[4] >= 2 && count >= 9 && bytes[8] <= 1 ? bytes[8] : 0;
++  settings.showGameTitle = bytes[4] >= 4 && count >= 18 && bytes[17] <= 1 ? bytes[17] : 1;
+   settings.controllerUsages = {{0x52, 0x51, 0x50, 0x4F, 0x1B, 0x1D, 0x28, 0x29}};
+-  if (bytes[4] == 3) {
++  if (bytes[4] >= 3) {
+     for (size_t i = 0; i < settings.controllerUsages.size(); ++i) {
+       if (bytes[9 + i] != 0) settings.controllerUsages[i] = bytes[9 + i];
+     }
+@@ -45,7 +48,7 @@ inline bool loadGameBoyUserSettings(GameBoyUserSettings& settings, const bool co
+ 
+ inline bool saveGameBoyUserSettings(const GameBoyUserSettings& settings, const bool colorEmulator = false) {
+   (void)Storage.mkdir("/.crosspoint");
+-  uint8_t bytes[17] = {'I', 'B', 'G', 'S', 3,
++  uint8_t bytes[18] = {'I', 'B', 'G', 'S', 4,
+                        static_cast<uint8_t>(settings.layout <= 1 ? settings.layout : 0),
+                        static_cast<uint8_t>(settings.refresh <= 2 ? settings.refresh : 0),
+                        static_cast<uint8_t>(settings.touchControls != 0),
+@@ -53,6 +56,7 @@ inline bool saveGameBoyUserSettings(const GameBoyUserSettings& settings, const b
+   for (size_t i = 0; i < settings.controllerUsages.size(); ++i) {
+     bytes[9 + i] = settings.controllerUsages[i];
+   }
++  bytes[17] = static_cast<uint8_t>(settings.showGameTitle != 0);
+ 
+   const char* tempPath = colorEmulator ? "/.crosspoint/game_settings_gbc.tmp" : "/.crosspoint/game_settings.tmp";
+   const char* finalPath = colorEmulator ? "/.crosspoint/game_settings_gbc.bin" : "/.crosspoint/game_settings.bin";
+diff --git a/src/activities/GameLibraryActivity.cpp b/src/activities/GameLibraryActivity.cpp
+index 205312b..53a4dca 100644
+--- a/src/activities/GameLibraryActivity.cpp
++++ b/src/activities/GameLibraryActivity.cpp
+@@ -279,7 +279,7 @@ size_t GameLibraryActivity::screenItemCount() const {
+     case Screen::Categories: return 7;
+     case Screen::Games: return visibleGames.size();
+     case Screen::GameActions: return 2;
+-    case Screen::Settings: return 7;
++    case Screen::Settings: return 8;
+ #if INKBOY_HAS_BLE_HID
+     case Screen::Bluetooth: return static_cast<size_t>(BleHid.deviceCount()) + 2;
+ #else
+@@ -436,6 +436,7 @@ void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginS
+         case 6:
+           openControllerMapping();
+           return;
++        case 7: settings.showGameTitle = settings.showGameTitle == 0 ? 1 : 0; break;
+       }
+       saveGameBoyUserSettings(settings, settingsForCgb);
+       std::snprintf(status, sizeof(status), "Settings saved");
+@@ -794,6 +795,8 @@ void GameLibraryActivity::render(RenderLock&&) {
+                        (settings.bluetoothEnabled ? tr(STR_ON) : tr(STR_OFF)));
+       labels.push_back(tr(STR_GAME_MANAGE_CONTROLLER));
+       labels.push_back(tr(STR_GAME_MAP_CONTROLLER));
++      labels.push_back(std::string(tr(STR_GAME_SHOW_TITLE)) + ": " +
++                       (settings.showGameTitle ? tr(STR_ON) : tr(STR_OFF)));
+       count = labels.size();
+       selectedLocal = selectedIndex;
+       break;
+diff --git a/src/activities/gameboy/GameBoyActivity.cpp b/src/activities/gameboy/GameBoyActivity.cpp
+index 2f563dd..b3ccfdc 100644
+--- a/src/activities/gameboy/GameBoyActivity.cpp
++++ b/src/activities/gameboy/GameBoyActivity.cpp
+@@ -12,6 +12,7 @@
+ #include <AppVersion.h>
+ #include <Arduino.h>
+ #include <HalDisplay.h>
++#include <HalPowerManager.h>
+ #include <HalStorage.h>
+ #include <Logging.h>
+ #include <esp_heap_caps.h>
+@@ -147,6 +148,7 @@ void GameBoyActivity::onEnter() {
+   physicalJoypadMask = 0;
+   touchJoypadMask = 0;
+   activeTouch = TouchControl::None;
++  multiTouchActive = false;
+   nextFrameUs = 0;
+   nextDisplayUs = 0;
+   displayDue.store(true, std::memory_order_release);
+@@ -158,6 +160,7 @@ void GameBoyActivity::onEnter() {
+   loadGameBoyUserSettings(userSettings, settingsProfileCgb);
+   portrait = userSettings.layout == 0;
+   touchControlsEnabled = userSettings.touchControls != 0;
++  showGameTitle = userSettings.showGameTitle != 0;
+   bluetoothUsages = userSettings.controllerUsages;
+   refreshPreset = 0;
+   bluetoothJoypadMask = 0;
+@@ -187,6 +190,7 @@ if (useWalnutCgb != settingsProfileCgb) {
+   loadGameBoyUserSettings(userSettings, useWalnutCgb);
+   portrait = userSettings.layout == 0;
+   touchControlsEnabled = userSettings.touchControls != 0;
++  showGameTitle = userSettings.showGameTitle != 0;
+   bluetoothUsages = userSettings.controllerUsages;
+   renderer.setOrientation(portrait ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
+   setLayout();
+@@ -426,9 +430,11 @@ void GameBoyActivity::render(RenderLock&&) {
+   // The framebuffer keeps the title and buttons from the last picture (the
+   // display is single-buffered): clear and redraw them only when they change,
+   // and with every cleaning refresh in case anything else drew on the screen.
++  const uint16_t batteryPercent = powerManager.getBatteryPercentage();
+   const uint32_t chrome = static_cast<uint32_t>(physicalJoypadMask | touchJoypadMask | bluetoothJoypadMask) |
+                           (static_cast<uint32_t>(activeTouch) << 8) | (portrait ? 0x10000u : 0u) |
+-                          (touchControlsEnabled ? 0x20000u : 0u);
++                          (touchControlsEnabled ? 0x20000u : 0u) | (showGameTitle ? 0x40000u : 0u) |
++                          (static_cast<uint32_t>(batteryPercent & 0x7FU) << 20);
+   const bool redrawChrome = cleaning || chrome != chromeKey;
+   if (redrawChrome) renderer.clearScreen(0xFF);
+   drawGameFrame();
+@@ -708,6 +714,7 @@ void GameBoyActivity::rotate() {
+   // under it.
+   mappedInput.suppressCurrentTouchContact();
+   activeTouch = TouchControl::None;
++  multiTouchActive = false;
+   touchJoypadMask = 0;
+   applyJoypad();
+   {
+@@ -1027,6 +1034,7 @@ if (cartRam) {
+   bluetoothJoypadMask = 0;
+   for (auto& held : bluetoothHeldButtons) held = {};
+   activeTouch = TouchControl::None;
++  multiTouchActive = false;
+   saveDirty = false;
+ }
+ 
+@@ -1108,17 +1116,67 @@ void GameBoyActivity::handleInput() {
+ 
+ #if CROSSINK_APP_CAP_TOUCH
+   if (touchControlsEnabled) {
+-    int x = 0;
+-    int y = 0;
+-    if (mappedInput.wasScreenTouchDown(x, y)) updateTouch(x, y);
+-    if (mappedInput.isScreenTouchHeld(x, y)) {
+-      updateTouch(x, y);
+-    } else if (mappedInput.wasScreenTouchReleased()) {
+-      activeTouch = TouchControl::None;
+-      touchJoypadMask = 0;
+-      applyJoypad();
++    bool handledMultiTouch = false;
++    int x1 = 0;
++    int y1 = 0;
++    int x2 = 0;
++    int y2 = 0;
++    if (mappedInput.getTwoFingerTouch(x1, y1, x2, y2)) {
++      handledMultiTouch = true;
++      multiTouchActive = true;
++      // Consume the single-touch down edge too, so it cannot replay after one
++      // finger lifts and unexpectedly replace the remaining button state.
++      int ignoredX = 0;
++      int ignoredY = 0;
++      (void)mappedInput.wasScreenTouchDown(ignoredX, ignoredY);
++
++      const TouchControl first = hitTestTouch(x1, y1);
++      const TouchControl second = hitTestTouch(x2, y2);
++      if (first == TouchControl::Exit || second == TouchControl::Exit) {
++        activeTouch = TouchControl::Exit;
++        touchJoypadMask = 0;
++        applyJoypad();
++        exitRequested = true;
++      } else if (first == TouchControl::Rotate || second == TouchControl::Rotate) {
++        activeTouch = TouchControl::Rotate;
++        touchJoypadMask = 0;
++        applyJoypad();
++        rotateRequested = true;
++      } else {
++        // Unlike the old single-touch mask, OR both controls so B+A or B+direction
++        // can be held simultaneously on the on-screen Game Boy buttons.
++        const uint8_t nextTouch = static_cast<uint8_t>(joypadBitForTouch(first) | joypadBitForTouch(second));
++        const TouchControl primary = first != TouchControl::None ? first : second;
++        if (nextTouch != touchJoypadMask || primary != activeTouch) {
++          activeTouch = primary;
++          touchJoypadMask = nextTouch;
++          applyJoypad();
++        }
++      }
++    }
++
++    if (!handledMultiTouch) {
++      if (multiTouchActive) {
++        // Return to the one-finger behavior cleanly; updateTouch below will
++        // rebuild the mask for the finger that is still held, if any.
++        multiTouchActive = false;
++        activeTouch = TouchControl::None;
++        touchJoypadMask = 0;
++        applyJoypad();
++      }
++      int x = 0;
++      int y = 0;
++      if (mappedInput.wasScreenTouchDown(x, y)) updateTouch(x, y);
++      if (mappedInput.isScreenTouchHeld(x, y)) {
++        updateTouch(x, y);
++      } else if (mappedInput.wasScreenTouchReleased()) {
++        activeTouch = TouchControl::None;
++        touchJoypadMask = 0;
++        applyJoypad();
++      }
+     }
+   } else {
++    multiTouchActive = false;
+     activeTouch = TouchControl::None;
+     touchJoypadMask = 0;
+   }
+@@ -1428,7 +1486,18 @@ void GameBoyActivity::drawControls() {
+   const uint8_t currentMask = static_cast<uint8_t>(physicalJoypadMask | touchJoypadMask | bluetoothJoypadMask);
+ 
+   renderer.drawRect(gameX - 1, gameY - 1, gameW + 2, gameH + 2, true);
+-  renderer.drawText(UI_10_FONT_ID, titleX, titleY, title[0] ? title : "GAME BOY", true, EpdFontFamily::BOLD);
++  char batteryLabel[8];
++  std::snprintf(batteryLabel, sizeof(batteryLabel), "%u%%", static_cast<unsigned>(powerManager.getBatteryPercentage()));
++  const int batteryWidth = renderer.getTextWidth(UI_10_FONT_ID, batteryLabel);
++  const int batteryX = std::max(0, renderer.getScreenWidth() - batteryWidth - 8);
++  if (showGameTitle) {
++    const char* gameTitle = title[0] ? title : "GAME BOY";
++    const int titleAvailable = std::max(1, batteryX - titleX - 8);
++    const std::string visibleTitle = renderer.truncatedText(UI_10_FONT_ID, gameTitle, titleAvailable,
++                                                            EpdFontFamily::BOLD);
++    renderer.drawText(UI_10_FONT_ID, titleX, titleY, visibleTitle.c_str(), true, EpdFontFamily::BOLD);
++  }
++  renderer.drawText(UI_10_FONT_ID, batteryX, titleY, batteryLabel, true, EpdFontFamily::REGULAR);
+   if (!touchControlsEnabled) return;
+   for (size_t i = 0; i < controlCount; ++i) {
+     const ControlButton& c = controls[i];
+diff --git a/src/activities/gameboy/GameBoyActivity.h b/src/activities/gameboy/GameBoyActivity.h
+index 703de23..4d65781 100644
+--- a/src/activities/gameboy/GameBoyActivity.h
++++ b/src/activities/gameboy/GameBoyActivity.h
+@@ -121,6 +121,8 @@ bool useWalnutCgb = false;
+   std::array<BluetoothHeldButton, 8> bluetoothHeldButtons{};
+   std::array<uint8_t, 8> bluetoothUsages{{0x52, 0x51, 0x50, 0x4F, 0x1B, 0x1D, 0x28, 0x29}};
+   bool touchControlsEnabled = true;
++  bool showGameTitle = true;
++  bool multiTouchActive = false;
+ 
+   int scale = 3;
+   int gameX = 160;

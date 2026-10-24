@@ -12,6 +12,7 @@ struct GameBoyUserSettings {
   uint8_t refresh = 0;
   uint8_t touchControls = 1;
   uint8_t bluetoothEnabled = 0;
+  uint8_t showGameTitle = 1;
   // HID keyboard usage IDs: Up, Down, Left, Right, A, B, Start, Select.
   std::array<uint8_t, 8> controllerUsages{{0x52, 0x51, 0x50, 0x4F, 0x1B, 0x1D, 0x28, 0x29}};
 };
@@ -21,21 +22,23 @@ inline bool loadGameBoyUserSettings(GameBoyUserSettings& settings, const bool co
   const char* path = colorEmulator ? "/.crosspoint/game_settings_gbc.bin" : "/.crosspoint/game_settings.bin";
   if (!Storage.openFileForRead("GBSET", path, file)) return false;
 
-  uint8_t bytes[17] = {};
+  uint8_t bytes[18] = {};
   const int count = file.read(bytes, sizeof(bytes));
   file.close();
 
-  // V1 used 8 bytes, V2 adds Bluetooth enable, and V3 appends 8 HID usages.
+  // V1 used 8 bytes, V2 adds Bluetooth enable, V3 adds HID usages, and V4 adds title visibility.
   if (count < 8 || bytes[0] != 'I' || bytes[1] != 'B' || bytes[2] != 'G' || bytes[3] != 'S' ||
-      bytes[4] < 1 || bytes[4] > 3 || (bytes[4] == 3 && count < 17)) {
+      bytes[4] < 1 || bytes[4] > 4 || (bytes[4] >= 3 && count < 17) ||
+      (bytes[4] >= 4 && count < 18)) {
     return false;
   }
   settings.layout = bytes[5] <= 1 ? bytes[5] : 0;
   settings.refresh = bytes[6] <= 2 ? bytes[6] : 0;
   settings.touchControls = bytes[7] <= 1 ? bytes[7] : 1;
   settings.bluetoothEnabled = bytes[4] >= 2 && count >= 9 && bytes[8] <= 1 ? bytes[8] : 0;
+  settings.showGameTitle = bytes[4] >= 4 && count >= 18 && bytes[17] <= 1 ? bytes[17] : 1;
   settings.controllerUsages = {{0x52, 0x51, 0x50, 0x4F, 0x1B, 0x1D, 0x28, 0x29}};
-  if (bytes[4] == 3) {
+  if (bytes[4] >= 3) {
     for (size_t i = 0; i < settings.controllerUsages.size(); ++i) {
       if (bytes[9 + i] != 0) settings.controllerUsages[i] = bytes[9 + i];
     }
@@ -45,7 +48,7 @@ inline bool loadGameBoyUserSettings(GameBoyUserSettings& settings, const bool co
 
 inline bool saveGameBoyUserSettings(const GameBoyUserSettings& settings, const bool colorEmulator = false) {
   (void)Storage.mkdir("/.crosspoint");
-  uint8_t bytes[17] = {'I', 'B', 'G', 'S', 3,
+  uint8_t bytes[18] = {'I', 'B', 'G', 'S', 4,
                        static_cast<uint8_t>(settings.layout <= 1 ? settings.layout : 0),
                        static_cast<uint8_t>(settings.refresh <= 2 ? settings.refresh : 0),
                        static_cast<uint8_t>(settings.touchControls != 0),
@@ -53,6 +56,7 @@ inline bool saveGameBoyUserSettings(const GameBoyUserSettings& settings, const b
   for (size_t i = 0; i < settings.controllerUsages.size(); ++i) {
     bytes[9 + i] = settings.controllerUsages[i];
   }
+  bytes[17] = static_cast<uint8_t>(settings.showGameTitle != 0);
 
   const char* tempPath = colorEmulator ? "/.crosspoint/game_settings_gbc.tmp" : "/.crosspoint/game_settings.tmp";
   const char* finalPath = colorEmulator ? "/.crosspoint/game_settings_gbc.bin" : "/.crosspoint/game_settings.bin";

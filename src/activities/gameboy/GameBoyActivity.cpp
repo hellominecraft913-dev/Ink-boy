@@ -12,6 +12,7 @@
 #include <AppVersion.h>
 #include <Arduino.h>
 #include <HalDisplay.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <esp_heap_caps.h>
@@ -147,6 +148,7 @@ void GameBoyActivity::onEnter() {
   physicalJoypadMask = 0;
   touchJoypadMask = 0;
   activeTouch = TouchControl::None;
+  multiTouchActive = false;
   nextFrameUs = 0;
   nextDisplayUs = 0;
   displayDue.store(true, std::memory_order_release);
@@ -158,6 +160,7 @@ void GameBoyActivity::onEnter() {
   loadGameBoyUserSettings(userSettings, settingsProfileCgb);
   portrait = userSettings.layout == 0;
   touchControlsEnabled = userSettings.touchControls != 0;
+  showGameTitle = userSettings.showGameTitle != 0;
   bluetoothUsages = userSettings.controllerUsages;
   refreshPreset = 0;
   bluetoothJoypadMask = 0;
@@ -187,6 +190,7 @@ if (useWalnutCgb != settingsProfileCgb) {
   loadGameBoyUserSettings(userSettings, useWalnutCgb);
   portrait = userSettings.layout == 0;
   touchControlsEnabled = userSettings.touchControls != 0;
+  showGameTitle = userSettings.showGameTitle != 0;
   bluetoothUsages = userSettings.controllerUsages;
   renderer.setOrientation(portrait ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
   setLayout();
@@ -426,9 +430,11 @@ void GameBoyActivity::render(RenderLock&&) {
   // The framebuffer keeps the title and buttons from the last picture (the
   // display is single-buffered): clear and redraw them only when they change,
   // and with every cleaning refresh in case anything else drew on the screen.
+  const uint16_t batteryPercent = powerManager.getBatteryPercentage();
   const uint32_t chrome = static_cast<uint32_t>(physicalJoypadMask | touchJoypadMask | bluetoothJoypadMask) |
                           (static_cast<uint32_t>(activeTouch) << 8) | (portrait ? 0x10000u : 0u) |
-                          (touchControlsEnabled ? 0x20000u : 0u);
+                          (touchControlsEnabled ? 0x20000u : 0u) | (showGameTitle ? 0x40000u : 0u) |
+                          (static_cast<uint32_t>(batteryPercent & 0x7FU) << 20);
   const bool redrawChrome = cleaning || chrome != chromeKey;
   if (redrawChrome) renderer.clearScreen(0xFF);
   drawGameFrame();
@@ -708,6 +714,7 @@ void GameBoyActivity::rotate() {
   // under it.
   mappedInput.suppressCurrentTouchContact();
   activeTouch = TouchControl::None;
+  multiTouchActive = false;
   touchJoypadMask = 0;
   applyJoypad();
   {
@@ -1027,6 +1034,7 @@ if (cartRam) {
   bluetoothJoypadMask = 0;
   for (auto& held : bluetoothHeldButtons) held = {};
   activeTouch = TouchControl::None;
+  multiTouchActive = false;
   saveDirty = false;
 }
 
@@ -1108,17 +1116,67 @@ void GameBoyActivity::handleInput() {
 
 #if CROSSINK_APP_CAP_TOUCH
   if (touchControlsEnabled) {
-    int x = 0;
-    int y = 0;
-    if (mappedInput.wasScreenTouchDown(x, y)) updateTouch(x, y);
-    if (mappedInput.isScreenTouchHeld(x, y)) {
-      updateTouch(x, y);
-    } else if (mappedInput.wasScreenTouchReleased()) {
-      activeTouch = TouchControl::None;
-      touchJoypadMask = 0;
-      applyJoypad();
+    bool handledMultiTouch = false;
+    int x1 = 0;
+    int y1 = 0;
+    int x2 = 0;
+    int y2 = 0;
+    if (mappedInput.getTwoFingerTouch(x1, y1, x2, y2)) {
+      handledMultiTouch = true;
+      multiTouchActive = true;
+      // Consume the single-touch down edge too, so it cannot replay after one
+      // finger lifts and unexpectedly replace the remaining button state.
+      int ignoredX = 0;
+      int ignoredY = 0;
+      (void)mappedInput.wasScreenTouchDown(ignoredX, ignoredY);
+
+      const TouchControl first = hitTestTouch(x1, y1);
+      const TouchControl second = hitTestTouch(x2, y2);
+      if (first == TouchControl::Exit || second == TouchControl::Exit) {
+        activeTouch = TouchControl::Exit;
+        touchJoypadMask = 0;
+        applyJoypad();
+        exitRequested = true;
+      } else if (first == TouchControl::Rotate || second == TouchControl::Rotate) {
+        activeTouch = TouchControl::Rotate;
+        touchJoypadMask = 0;
+        applyJoypad();
+        rotateRequested = true;
+      } else {
+        // Unlike the old single-touch mask, OR both controls so B+A or B+direction
+        // can be held simultaneously on the on-screen Game Boy buttons.
+        const uint8_t nextTouch = static_cast<uint8_t>(joypadBitForTouch(first) | joypadBitForTouch(second));
+        const TouchControl primary = first != TouchControl::None ? first : second;
+        if (nextTouch != touchJoypadMask || primary != activeTouch) {
+          activeTouch = primary;
+          touchJoypadMask = nextTouch;
+          applyJoypad();
+        }
+      }
+    }
+
+    if (!handledMultiTouch) {
+      if (multiTouchActive) {
+        // Return to the one-finger behavior cleanly; updateTouch below will
+        // rebuild the mask for the finger that is still held, if any.
+        multiTouchActive = false;
+        activeTouch = TouchControl::None;
+        touchJoypadMask = 0;
+        applyJoypad();
+      }
+      int x = 0;
+      int y = 0;
+      if (mappedInput.wasScreenTouchDown(x, y)) updateTouch(x, y);
+      if (mappedInput.isScreenTouchHeld(x, y)) {
+        updateTouch(x, y);
+      } else if (mappedInput.wasScreenTouchReleased()) {
+        activeTouch = TouchControl::None;
+        touchJoypadMask = 0;
+        applyJoypad();
+      }
     }
   } else {
+    multiTouchActive = false;
     activeTouch = TouchControl::None;
     touchJoypadMask = 0;
   }
@@ -1428,7 +1486,18 @@ void GameBoyActivity::drawControls() {
   const uint8_t currentMask = static_cast<uint8_t>(physicalJoypadMask | touchJoypadMask | bluetoothJoypadMask);
 
   renderer.drawRect(gameX - 1, gameY - 1, gameW + 2, gameH + 2, true);
-  renderer.drawText(UI_10_FONT_ID, titleX, titleY, title[0] ? title : "GAME BOY", true, EpdFontFamily::BOLD);
+  char batteryLabel[8];
+  std::snprintf(batteryLabel, sizeof(batteryLabel), "%u%%", static_cast<unsigned>(powerManager.getBatteryPercentage()));
+  const int batteryWidth = renderer.getTextWidth(UI_10_FONT_ID, batteryLabel);
+  const int batteryX = std::max(0, renderer.getScreenWidth() - batteryWidth - 8);
+  if (showGameTitle) {
+    const char* gameTitle = title[0] ? title : "GAME BOY";
+    const int titleAvailable = std::max(1, batteryX - titleX - 8);
+    const std::string visibleTitle = renderer.truncatedText(UI_10_FONT_ID, gameTitle, titleAvailable,
+                                                            EpdFontFamily::BOLD);
+    renderer.drawText(UI_10_FONT_ID, titleX, titleY, visibleTitle.c_str(), true, EpdFontFamily::BOLD);
+  }
+  renderer.drawText(UI_10_FONT_ID, batteryX, titleY, batteryLabel, true, EpdFontFamily::REGULAR);
   if (!touchControlsEnabled) return;
   for (size_t i = 0; i < controlCount; ++i) {
     const ControlButton& c = controls[i];
