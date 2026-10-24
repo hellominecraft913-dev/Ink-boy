@@ -89,6 +89,29 @@ std::string GameLibraryActivity::titleForPath(const std::string& path) const {
   return path.substr(start, end - start);
 }
 
+std::string GameLibraryActivity::savePathForRom(const std::string& romPath) const {
+  std::string savePath = romPath;
+  const size_t slash = savePath.find_last_of('/');
+  const size_t dot = savePath.find_last_of('.');
+  if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+    savePath += ".sav";
+  } else {
+    savePath.replace(dot, std::string::npos, ".sav");
+  }
+  return savePath;
+}
+
+bool GameLibraryActivity::deleteSelectedSave() {
+  if (selectedIndex >= games.size()) return false;
+  const std::string savePath = savePathForRom(games[selectedIndex].path);
+  const std::string backupPath = savePath + ".bak";
+  const std::string tempPath = savePath + ".tmp";
+  if (Storage.exists(savePath.c_str())) Storage.remove(savePath.c_str());
+  if (Storage.exists(backupPath.c_str())) Storage.remove(backupPath.c_str());
+  if (Storage.exists(tempPath.c_str())) Storage.remove(tempPath.c_str());
+  return !Storage.exists(savePath.c_str()) && !Storage.exists(backupPath.c_str()) && !Storage.exists(tempPath.c_str());
+}
+
 void GameLibraryActivity::scanDirectory(const std::string& path, const unsigned depth) {
   if (depth > MAX_SCAN_DEPTH || games.size() >= MAX_GAMES) return;
 
@@ -250,7 +273,7 @@ void GameLibraryActivity::rebuildVisibleGames() {
 
 size_t GameLibraryActivity::screenItemCount() const {
   switch (screen) {
-    case Screen::Categories: return 5;
+    case Screen::Categories: return 6;
     case Screen::Games: return visibleGames.size();
     case Screen::Settings: return 6;
 #if INKBOY_HAS_BLE_HID
@@ -259,6 +282,7 @@ size_t GameLibraryActivity::screenItemCount() const {
     case Screen::Bluetooth: return 1;
 #endif
     case Screen::ControllerMapping: return settings.controllerUsages.size();
+    case Screen::SaveManager: return games.size();
   }
   return 0;
 }
@@ -328,8 +352,13 @@ void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginS
         screen = Screen::Settings;
         selectedIndex = 0;
         visibleStart = 0;
-      } else {
+      } else if (selectedIndex == 4) {
         openBluetoothScreen(beginScan);
+      } else {
+        screen = Screen::SaveManager;
+        selectedIndex = 0;
+        visibleStart = 0;
+        confirmDeleteSave = false;
       }
       break;
 
@@ -359,6 +388,23 @@ void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginS
       }
       saveGameBoyUserSettings(settings);
       std::snprintf(status, sizeof(status), "Settings saved");
+      break;
+
+    case Screen::SaveManager:
+      if (selectedIndex < games.size()) {
+        const std::string savePath = savePathForRom(games[selectedIndex].path);
+        if (!Storage.exists(savePath.c_str())) {
+          confirmDeleteSave = false;
+          std::snprintf(status, sizeof(status), "No save file exists for this game");
+        } else if (!confirmDeleteSave) {
+          confirmDeleteSave = true;
+          std::snprintf(status, sizeof(status), "Confirm deletes this save; Back cancels");
+        } else {
+          const bool deleted = deleteSelectedSave();
+          confirmDeleteSave = false;
+          std::snprintf(status, sizeof(status), "%s", deleted ? "Save removed" : "Could not remove save");
+        }
+      }
       break;
 
     case Screen::ControllerMapping:
@@ -505,7 +551,11 @@ void GameLibraryActivity::loop() {
     RenderLock lock(*this);
     const size_t count = screenItemCount();
     if (mappedInput.wasReleased(Button::Back)) {
-      if (screen == Screen::Categories) {
+      if (confirmDeleteSave) {
+        confirmDeleteSave = false;
+        std::snprintf(status, sizeof(status), "Save deletion cancelled");
+        changed = true;
+      } else if (screen == Screen::Categories) {
         exit = true;
       } else {
         screen = Screen::Categories;
@@ -516,9 +566,11 @@ void GameLibraryActivity::loop() {
       }
     } else if (mappedInput.wasReleased(Button::Up) && count > 0) {
       selectedIndex = selectedIndex == 0 ? count - 1 : selectedIndex - 1;
+      if (confirmDeleteSave) confirmDeleteSave = false;
       changed = true;
     } else if (mappedInput.wasReleased(Button::Down) && count > 0) {
       selectedIndex = (selectedIndex + 1) % count;
+      if (confirmDeleteSave) confirmDeleteSave = false;
       changed = true;
     } else if (screen == Screen::Games && mappedInput.wasReleased(Button::Left)) {
       filter = static_cast<Filter>((static_cast<uint8_t>(filter) + 2) % 3);
@@ -534,6 +586,16 @@ void GameLibraryActivity::loop() {
                selectedIndex < visibleGames.size()) {
       toggleFavorite(games[visibleGames[selectedIndex]].path);
       selectedIndex = std::min(selectedIndex, visibleGames.empty() ? size_t{0} : visibleGames.size() - 1);
+      changed = true;
+    } else if (screen == Screen::SaveManager && mappedInput.wasReleased(Button::Power) &&
+               selectedIndex < games.size()) {
+      const std::string savePath = savePathForRom(games[selectedIndex].path);
+      if (Storage.exists(savePath.c_str())) {
+        confirmDeleteSave = true;
+        std::snprintf(status, sizeof(status), "Confirm deletes this save; Back cancels");
+      } else {
+        std::snprintf(status, sizeof(status), "No save file exists for this game");
+      }
       changed = true;
     } else if (screen == Screen::ControllerMapping && mappedInput.wasReleased(Button::Power) &&
                selectedIndex < settings.controllerUsages.size()) {
@@ -590,6 +652,7 @@ void GameLibraryActivity::render(RenderLock&&) {
       labels.push_back(std::string(tr(STR_GAME_RECENT)) + " (" + std::to_string(recents.size()) + ")");
       labels.push_back(tr(STR_GAME_SETTINGS));
       labels.push_back(tr(STR_GAME_CONTROLLER));
+      labels.push_back(tr(STR_GAME_SAVE_MANAGER));
       count = labels.size();
       selectedLocal = selectedIndex;
       break;
@@ -603,7 +666,11 @@ void GameLibraryActivity::render(RenderLock&&) {
       visibleStart = start;
       for (size_t i = 0; i < count; ++i) {
         const auto& game = games[visibleGames[start + i]];
-        labels.push_back((isFavorite(game.path) ? "* " : "  ") + game.title);
+        std::string label = (isFavorite(game.path) ? "* " : "  ") + game.title;
+        label += FsHelpers::checkFileExtension(std::string_view{game.path}, ".gbc") ? " [GBC]" : " [GB]";
+        const std::string savePath = savePathForRom(game.path);
+        if (Storage.exists(savePath.c_str())) label += " [SAVE]";
+        labels.push_back(std::move(label));
       }
       selectedLocal = selectedIndex >= visibleStart ? selectedIndex - visibleStart : 0;
       if (visibleGames.empty()) {
@@ -631,6 +698,30 @@ void GameLibraryActivity::render(RenderLock&&) {
       count = labels.size();
       selectedLocal = selectedIndex;
       break;
+
+    case Screen::SaveManager: {
+      header = tr(STR_GAME_SAVE_MANAGER);
+      count = std::min(MAX_VISIBLE_ROWS, games.size());
+      size_t start = selectedIndex > MAX_VISIBLE_ROWS / 2 ? selectedIndex - MAX_VISIBLE_ROWS / 2 : 0;
+      if (start + count > games.size()) start = games.size() > count ? games.size() - count : 0;
+      visibleStart = start;
+      for (size_t i = 0; i < count; ++i) {
+        const auto& game = games[start + i];
+        const std::string savePath = savePathForRom(game.path);
+        std::string label = Storage.exists(savePath.c_str()) ? "[SAVE] " : "[NO SAVE] ";
+        label += game.title;
+        label += FsHelpers::checkFileExtension(std::string_view{game.path}, ".gbc") ? " [GBC]" : " [GB]";
+        labels.push_back(std::move(label));
+      }
+      selectedLocal = selectedIndex >= visibleStart ? selectedIndex - visibleStart : 0;
+      if (games.empty()) {
+        labels.emplace_back(tr(STR_GAME_NO_ROMS));
+        count = 1;
+        selectedLocal = 0;
+        visibleStart = 0;
+      }
+      break;
+    }
 
     case Screen::ControllerMapping: {
       header = tr(STR_GAME_MAP_CONTROLLER);
@@ -704,6 +795,8 @@ void GameLibraryActivity::render(RenderLock&&) {
   } else if (screen == Screen::ControllerMapping) {
     hints = mappedInput.mapLabels(tr(STR_BACK), awaitingControllerMapping ? tr(STR_GAME_WAITING_INPUT) : tr(STR_SELECT),
                                   tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  } else if (screen == Screen::SaveManager) {
+    hints = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   } else {
     hints = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   }
