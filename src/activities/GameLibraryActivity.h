@@ -19,7 +19,7 @@ class GameLibraryActivity final : public Activity {
   bool blocksGlobalInput() const override { return true; }
 
  private:
-  enum class Screen : uint8_t { Categories, Games, Settings, Bluetooth };
+  enum class Screen : uint8_t { Categories, Games, Settings, Bluetooth, ControllerMapping };
   enum class Filter : uint8_t { All, Favorites, Recent };
 
   struct GameEntry {
@@ -44,6 +44,8 @@ class GameLibraryActivity final : public Activity {
   GameBoyUserSettings settings;
   char status[96] = {};
   uint8_t lastBluetoothDeviceCount = 0;
+  bool awaitingControllerMapping = false;
+  bool lastBluetoothConnected = false;
 
   void scanDirectory(const std::string& path, unsigned depth);
   void loadLibraryState();
@@ -55,6 +57,7 @@ class GameLibraryActivity final : public Activity {
   void toggleFavorite(const std::string& path);
   void recordRecent(const std::string& path);
   void openBluetoothScreen(bool& beginScan);
+  void openControllerMapping();
   void refreshBluetooth();
   void stopBluetooth();
   void activateSelected(std::string& launchPath, bool& beginScan, bool& shutdownBluetooth);

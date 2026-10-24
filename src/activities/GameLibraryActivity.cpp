@@ -252,12 +252,13 @@ size_t GameLibraryActivity::screenItemCount() const {
   switch (screen) {
     case Screen::Categories: return 5;
     case Screen::Games: return visibleGames.size();
-    case Screen::Settings: return 5;
+    case Screen::Settings: return 6;
 #if INKBOY_HAS_BLE_HID
     case Screen::Bluetooth: return static_cast<size_t>(BleHid.deviceCount()) + 2;
 #else
     case Screen::Bluetooth: return 1;
 #endif
+    case Screen::ControllerMapping: return settings.controllerUsages.size();
   }
   return 0;
 }
@@ -269,6 +270,14 @@ void GameLibraryActivity::openBluetoothScreen(bool& beginScan) {
   settings.bluetoothEnabled = 1;
   saveGameBoyUserSettings(settings);
   beginScan = true;
+}
+
+void GameLibraryActivity::openControllerMapping() {
+  screen = Screen::ControllerMapping;
+  selectedIndex = 0;
+  visibleStart = 0;
+  awaitingControllerMapping = false;
+  status[0] = '\0';
 }
 
 void GameLibraryActivity::refreshBluetooth() {
@@ -302,6 +311,7 @@ void GameLibraryActivity::stopBluetooth() {
       LOG_ERR(kTag, "BLE host is still stopping");
     }
   }
+  lastBluetoothConnected = false;
 #endif
 }
 
@@ -343,9 +353,26 @@ void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginS
         case 4:
           openBluetoothScreen(beginScan);
           return;
+        case 5:
+          openControllerMapping();
+          return;
       }
       saveGameBoyUserSettings(settings);
       std::snprintf(status, sizeof(status), "Settings saved");
+      break;
+
+    case Screen::ControllerMapping:
+#if INKBOY_HAS_BLE_HID
+      if (BleHid.isConnected()) {
+        awaitingControllerMapping = true;
+        static const char* names[] = {"Up", "Down", "Left", "Right", "A", "B", "Start", "Select"};
+        std::snprintf(status, sizeof(status), "Press controller input for %s", names[selectedIndex]);
+      } else {
+        std::snprintf(status, sizeof(status), "Connect a BLE HID controller first");
+      }
+#else
+      std::snprintf(status, sizeof(status), "BLE HID is available on X4 Pro only");
+#endif
       break;
 
     case Screen::Bluetooth:
@@ -383,6 +410,27 @@ void GameLibraryActivity::loop() {
 #if INKBOY_HAS_BLE_HID
   if (BleHid.isRunning()) {
     BleHid.poll();
+    freeink::RawButtonEvent rawEvent;
+    while (BleHid.popRawButton(rawEvent)) {
+      if (!rawEvent.pressed || rawEvent.wasRest || rawEvent.keycode == 0) continue;
+      bool learned = false;
+      {
+        RenderLock lock(*this);
+        if (screen == Screen::ControllerMapping && awaitingControllerMapping &&
+            selectedIndex < settings.controllerUsages.size()) {
+          const size_t mapIndex = selectedIndex;
+          settings.controllerUsages[mapIndex] = rawEvent.keycode;
+          const bool saved = saveGameBoyUserSettings(settings);
+          awaitingControllerMapping = false;
+          static const char* names[] = {"Up", "Down", "Left", "Right", "A", "B", "Start", "Select"};
+          std::snprintf(status, sizeof(status), saved ? "%s mapped; choose next control" : "Could not save mapping",
+                        names[mapIndex]);
+          selectedIndex = (selectedIndex + 1) % settings.controllerUsages.size();
+          learned = true;
+        }
+      }
+      if (learned) requestUpdate();
+    }
     const uint8_t discoveredNow = BleHid.deviceCount();
     if (discoveredNow != lastBluetoothDeviceCount) {
       lastBluetoothDeviceCount = discoveredNow;
@@ -400,10 +448,13 @@ void GameLibraryActivity::loop() {
       std::snprintf(nextStatus, sizeof(nextStatus), "Pairing code: %06lu", static_cast<unsigned long>(passkey));
       statusEvent = true;
     }
-    if (!statusEvent && BleHid.isConnected()) {
-      std::snprintf(nextStatus, sizeof(nextStatus), "Connected: %.31s", BleHid.connectedName());
+    const bool connectedNow = BleHid.isConnected();
+    if (!statusEvent && connectedNow != lastBluetoothConnected) {
+      if (connectedNow) std::snprintf(nextStatus, sizeof(nextStatus), "Connected: %.31s", BleHid.connectedName());
+      else std::snprintf(nextStatus, sizeof(nextStatus), "Controller disconnected");
       statusEvent = true;
     }
+    lastBluetoothConnected = connectedNow;
     if (statusEvent) {
       bool changed = false;
       {
@@ -460,6 +511,7 @@ void GameLibraryActivity::loop() {
         screen = Screen::Categories;
         selectedIndex = 0;
         visibleStart = 0;
+        awaitingControllerMapping = false;
         changed = true;
       }
     } else if (mappedInput.wasReleased(Button::Up) && count > 0) {
@@ -482,6 +534,16 @@ void GameLibraryActivity::loop() {
                selectedIndex < visibleGames.size()) {
       toggleFavorite(games[visibleGames[selectedIndex]].path);
       selectedIndex = std::min(selectedIndex, visibleGames.empty() ? size_t{0} : visibleGames.size() - 1);
+      changed = true;
+    } else if (screen == Screen::ControllerMapping && mappedInput.wasReleased(Button::Power) &&
+               selectedIndex < settings.controllerUsages.size()) {
+      GameBoyUserSettings defaults;
+      settings.controllerUsages[selectedIndex] = defaults.controllerUsages[selectedIndex];
+      const bool saved = saveGameBoyUserSettings(settings);
+      static const char* names[] = {"Up", "Down", "Left", "Right", "A", "B", "Start", "Select"};
+      std::snprintf(status, sizeof(status), saved ? "%s reset to default" : "Could not reset mapping",
+                    names[selectedIndex]);
+      awaitingControllerMapping = false;
       changed = true;
     } else if (mappedInput.wasReleased(Button::Confirm)) {
       activateSelected(launchPath, beginScan, shutdownBluetooth);
@@ -565,9 +627,24 @@ void GameLibraryActivity::render(RenderLock&&) {
       labels.push_back(std::string(tr(STR_GAME_BLUETOOTH)) + ": " +
                        (settings.bluetoothEnabled ? tr(STR_ON) : tr(STR_OFF)));
       labels.push_back(tr(STR_GAME_MANAGE_CONTROLLER));
+      labels.push_back(tr(STR_GAME_MAP_CONTROLLER));
       count = labels.size();
       selectedLocal = selectedIndex;
       break;
+
+    case Screen::ControllerMapping: {
+      header = tr(STR_GAME_MAP_CONTROLLER);
+      static const char* names[] = {"Up", "Down", "Left", "Right", "A", "B", "Start", "Select"};
+      count = settings.controllerUsages.size();
+      for (size_t i = 0; i < settings.controllerUsages.size(); ++i) {
+        char label[48];
+        std::snprintf(label, sizeof(label), "%s: HID %u", names[i],
+                      static_cast<unsigned>(settings.controllerUsages[i]));
+        labels.emplace_back(label);
+      }
+      selectedLocal = selectedIndex;
+      break;
+    }
 
     case Screen::Bluetooth:
       header = tr(STR_GAME_CONTROLLER);
@@ -624,6 +701,9 @@ void GameLibraryActivity::render(RenderLock&&) {
     hints = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   } else if (screen == Screen::Games) {
     hints = mappedInput.mapLabels(tr(STR_BACK), tr(STR_GAME_PLAY), tr(STR_GAME_FILTER), tr(STR_GAME_FAVORITE_ACTION));
+  } else if (screen == Screen::ControllerMapping) {
+    hints = mappedInput.mapLabels(tr(STR_BACK), awaitingControllerMapping ? tr(STR_GAME_WAITING_INPUT) : tr(STR_SELECT),
+                                  tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   } else {
     hints = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   }
