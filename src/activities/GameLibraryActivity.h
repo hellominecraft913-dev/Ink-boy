@@ -42,6 +42,7 @@ class GameLibraryActivity final : public Activity {
   std::vector<std::string> favorites;
   std::vector<std::string> recents;
   GameBoyUserSettings settings;
+  bool settingsForCgb = false;
   char status[96] = {};
   uint8_t lastBluetoothDeviceCount = 0;
   bool awaitingControllerMapping = false;

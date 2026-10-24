@@ -16,9 +16,10 @@ struct GameBoyUserSettings {
   std::array<uint8_t, 8> controllerUsages{{0x52, 0x51, 0x50, 0x4F, 0x1B, 0x1D, 0x28, 0x29}};
 };
 
-inline bool loadGameBoyUserSettings(GameBoyUserSettings& settings) {
+inline bool loadGameBoyUserSettings(GameBoyUserSettings& settings, const bool colorEmulator = false) {
   FsFile file;
-  if (!Storage.openFileForRead("GBSET", "/.crosspoint/game_settings.bin", file)) return false;
+  const char* path = colorEmulator ? "/.crosspoint/game_settings_gbc.bin" : "/.crosspoint/game_settings.bin";
+  if (!Storage.openFileForRead("GBSET", path, file)) return false;
 
   uint8_t bytes[17] = {};
   const int count = file.read(bytes, sizeof(bytes));
@@ -42,7 +43,7 @@ inline bool loadGameBoyUserSettings(GameBoyUserSettings& settings) {
   return true;
 }
 
-inline bool saveGameBoyUserSettings(const GameBoyUserSettings& settings) {
+inline bool saveGameBoyUserSettings(const GameBoyUserSettings& settings, const bool colorEmulator = false) {
   (void)Storage.mkdir("/.crosspoint");
   uint8_t bytes[17] = {'I', 'B', 'G', 'S', 3,
                        static_cast<uint8_t>(settings.layout <= 1 ? settings.layout : 0),
@@ -53,8 +54,8 @@ inline bool saveGameBoyUserSettings(const GameBoyUserSettings& settings) {
     bytes[9 + i] = settings.controllerUsages[i];
   }
 
-  constexpr char tempPath[] = "/.crosspoint/game_settings.tmp";
-  constexpr char finalPath[] = "/.crosspoint/game_settings.bin";
+  const char* tempPath = colorEmulator ? "/.crosspoint/game_settings_gbc.tmp" : "/.crosspoint/game_settings.tmp";
+  const char* finalPath = colorEmulator ? "/.crosspoint/game_settings_gbc.bin" : "/.crosspoint/game_settings.bin";
   FsFile file;
   if (!Storage.openFileForWrite("GBSET", tempPath, file)) {
     LOG_ERR("GBSET", "Could not open temporary settings file");

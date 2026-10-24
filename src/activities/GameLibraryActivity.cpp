@@ -61,8 +61,9 @@ void GameLibraryActivity::onEnter() {
   visibleGames.clear();
   favorites.clear();
   recents.clear();
+  settingsForCgb = false;
   settings = GameBoyUserSettings{};
-  loadGameBoyUserSettings(settings);
+  loadGameBoyUserSettings(settings, settingsForCgb);
   loadLibraryState();
 
   // One bounded SD-card scan per visit. Directory handles are closed before the
@@ -275,7 +276,7 @@ size_t GameLibraryActivity::screenItemCount() const {
   switch (screen) {
     case Screen::Categories: return 6;
     case Screen::Games: return visibleGames.size();
-    case Screen::Settings: return 6;
+    case Screen::Settings: return 7;
 #if INKBOY_HAS_BLE_HID
     case Screen::Bluetooth: return static_cast<size_t>(BleHid.deviceCount()) + 2;
 #else
@@ -292,7 +293,7 @@ void GameLibraryActivity::openBluetoothScreen(bool& beginScan) {
   selectedIndex = 0;
   visibleStart = 0;
   settings.bluetoothEnabled = 1;
-  saveGameBoyUserSettings(settings);
+  saveGameBoyUserSettings(settings, settingsForCgb);
   beginScan = true;
 }
 
@@ -352,6 +353,7 @@ void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginS
         screen = Screen::Settings;
         selectedIndex = 0;
         visibleStart = 0;
+        loadGameBoyUserSettings(settings, settingsForCgb);
       } else if (selectedIndex == 4) {
         openBluetoothScreen(beginScan);
       } else {
@@ -373,21 +375,28 @@ void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginS
 
     case Screen::Settings:
       switch (selectedIndex) {
-        case 0: settings.layout = settings.layout == 0 ? 1 : 0; break;
-        case 1: settings.refresh = static_cast<uint8_t>((settings.refresh + 1) % 3); break;
-        case 2: settings.touchControls = settings.touchControls == 0 ? 1 : 0; break;
-        case 3:
+        case 0:
+          settingsForCgb = !settingsForCgb;
+          settings = GameBoyUserSettings{};
+          loadGameBoyUserSettings(settings, settingsForCgb);
+          std::snprintf(status, sizeof(status), "%s settings loaded",
+                        settingsForCgb ? "Game Boy Color" : "Game Boy");
+          return;
+        case 1: settings.layout = settings.layout == 0 ? 1 : 0; break;
+        case 2: settings.refresh = static_cast<uint8_t>((settings.refresh + 1) % 3); break;
+        case 3: settings.touchControls = settings.touchControls == 0 ? 1 : 0; break;
+        case 4:
           settings.bluetoothEnabled = settings.bluetoothEnabled == 0 ? 1 : 0;
           shutdownBluetooth = settings.bluetoothEnabled == 0;
           break;
-        case 4:
+        case 5:
           openBluetoothScreen(beginScan);
           return;
-        case 5:
+        case 6:
           openControllerMapping();
           return;
       }
-      saveGameBoyUserSettings(settings);
+      saveGameBoyUserSettings(settings, settingsForCgb);
       std::snprintf(status, sizeof(status), "Settings saved");
       break;
 
@@ -473,7 +482,7 @@ void GameLibraryActivity::loop() {
             selectedIndex < settings.controllerUsages.size()) {
           const size_t mapIndex = selectedIndex;
           settings.controllerUsages[mapIndex] = rawEvent.keycode;
-          const bool saved = saveGameBoyUserSettings(settings);
+          const bool saved = saveGameBoyUserSettings(settings, settingsForCgb);
           awaitingControllerMapping = false;
           static const char* names[] = {"Up", "Down", "Left", "Right", "A", "B", "Start", "Select"};
           std::snprintf(status, sizeof(status), saved ? "%s mapped; choose next control" : "Could not save mapping",
@@ -616,7 +625,7 @@ void GameLibraryActivity::loop() {
                selectedIndex < settings.controllerUsages.size()) {
       GameBoyUserSettings defaults;
       settings.controllerUsages[selectedIndex] = defaults.controllerUsages[selectedIndex];
-      const bool saved = saveGameBoyUserSettings(settings);
+      const bool saved = saveGameBoyUserSettings(settings, settingsForCgb);
       static const char* names[] = {"Up", "Down", "Left", "Right", "A", "B", "Start", "Select"};
       std::snprintf(status, sizeof(status), saved ? "%s reset to default" : "Could not reset mapping",
                     names[selectedIndex]);
@@ -699,6 +708,8 @@ void GameLibraryActivity::render(RenderLock&&) {
 
     case Screen::Settings:
       header = tr(STR_GAME_SETTINGS);
+      labels.push_back(std::string(tr(STR_GAME_EMULATOR)) + ": " +
+                       (settingsForCgb ? tr(STR_GAMEBOY_COLOR) : tr(STR_GAMEBOY)));
       labels.push_back(std::string(tr(STR_GAME_LAYOUT)) + ": " +
                        (settings.layout == 0 ? tr(STR_GAME_PORTRAIT) : tr(STR_GAME_LANDSCAPE)));
       labels.push_back(std::string(tr(STR_GAME_REFRESH_MODE)) + ": " +

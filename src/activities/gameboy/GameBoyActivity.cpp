@@ -153,8 +153,9 @@ void GameBoyActivity::onEnter() {
   error[0] = '\0';
   title[0] = '\0';
 
+  const bool settingsProfileCgb = FsHelpers::checkFileExtension(romPath, ".gbc");
   GameBoyUserSettings userSettings;
-  loadGameBoyUserSettings(userSettings);
+  loadGameBoyUserSettings(userSettings, settingsProfileCgb);
   portrait = userSettings.layout == 0;
   touchControlsEnabled = userSettings.touchControls != 0;
   bluetoothUsages = userSettings.controllerUsages;
@@ -164,14 +165,6 @@ void GameBoyActivity::onEnter() {
   rotateRequested = false;
   renderer.setOrientation(portrait ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
   setLayout();
-#if INKBOY_HAS_BLE_HID
-  if (userSettings.bluetoothEnabled) {
-    if (BleHid.isStopping()) BleHid.end(1500);
-    if (!BleHid.isRunning() && !BleHid.isStopping() && !BleHid.begin("Ink-boy")) {
-      LOG_ERR(TAG, "Could not initialize BLE HID host");
-    }
-  }
-#endif
   renderer.clearScreen(0xFF);
   chromeKey = CHROME_NONE;
 
@@ -189,6 +182,24 @@ if (!loadRom()) {
 useWalnutCgb =
     FsHelpers::checkFileExtension(romPath, ".gbc") ||
     ((rom[0x143] & 0x80U) != 0);
+
+if (useWalnutCgb != settingsProfileCgb) {
+  loadGameBoyUserSettings(userSettings, useWalnutCgb);
+  portrait = userSettings.layout == 0;
+  touchControlsEnabled = userSettings.touchControls != 0;
+  bluetoothUsages = userSettings.controllerUsages;
+  renderer.setOrientation(portrait ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
+  setLayout();
+}
+
+#if INKBOY_HAS_BLE_HID
+if (userSettings.bluetoothEnabled) {
+  if (BleHid.isStopping()) BleHid.end(1500);
+  if (!BleHid.isRunning() && !BleHid.isStopping() && !BleHid.begin("Ink-boy")) {
+    LOG_ERR(TAG, "Could not initialize BLE HID host");
+  }
+}
+#endif
 
 if (!buildSavePaths() || !initEmulator() || !loadSave()) {
   return;
@@ -708,7 +719,7 @@ void GameBoyActivity::rotate() {
   GameBoyUserSettings settings;
   loadGameBoyUserSettings(settings);
   settings.layout = portrait ? 0 : 1;
-  saveGameBoyUserSettings(settings);
+  saveGameBoyUserSettings(settings, useWalnutCgb);
   fullRefreshDue.store(true, std::memory_order_release);
   displayDue.store(true, std::memory_order_release);
   requestUpdate();
