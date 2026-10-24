@@ -1,5 +1,5 @@
 #include "GameBoyActivity.h"
-#include "GameBoySettingsStore.h"
+#include "../GameBoySettingsStore.h"
 #if !defined(SIMULATOR) && defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
 #include <BleKeyboardHost.h>
 #define INKBOY_HAS_BLE_HID 1

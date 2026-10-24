@@ -43,6 +43,7 @@ class GameLibraryActivity final : public Activity {
   std::vector<std::string> recents;
   GameBoyUserSettings settings;
   char status[96] = {};
+  uint8_t lastBluetoothDeviceCount = 0;
 
   void scanDirectory(const std::string& path, unsigned depth);
   void loadLibraryState();

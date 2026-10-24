@@ -280,6 +280,7 @@ void GameLibraryActivity::refreshBluetooth() {
     std::snprintf(nextStatus, sizeof(nextStatus), "Bluetooth initialization failed");
   } else {
     BleHid.startScan(8000);
+    lastBluetoothDeviceCount = BleHid.deviceCount();
     std::snprintf(nextStatus, sizeof(nextStatus), "Scanning for BLE HID controllers...");
   }
 #else
@@ -382,6 +383,11 @@ void GameLibraryActivity::loop() {
 #if INKBOY_HAS_BLE_HID
   if (BleHid.isRunning()) {
     BleHid.poll();
+    const uint8_t discoveredNow = BleHid.deviceCount();
+    if (discoveredNow != lastBluetoothDeviceCount) {
+      lastBluetoothDeviceCount = discoveredNow;
+      requestUpdate();
+    }
     char nextStatus[sizeof(status)] = {};
     char failure[48] = {};
     bool statusEvent = false;
