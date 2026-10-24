@@ -274,7 +274,7 @@ void GameLibraryActivity::rebuildVisibleGames() {
 
 size_t GameLibraryActivity::screenItemCount() const {
   switch (screen) {
-    case Screen::Categories: return 6;
+    case Screen::Categories: return 7;
     case Screen::Games: return visibleGames.size();
     case Screen::Settings: return 7;
 #if INKBOY_HAS_BLE_HID
@@ -343,18 +343,30 @@ void GameLibraryActivity::stopBluetooth() {
 void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginScan, bool& shutdownBluetooth) {
   switch (screen) {
     case Screen::Categories:
-      if (selectedIndex <= 2) {
-        filter = selectedIndex == 0 ? Filter::All : (selectedIndex == 1 ? Filter::Favorites : Filter::Recent);
+      if (selectedIndex == 0) {
+        for (const auto& recentPath : recents) {
+          const auto found = std::find_if(games.begin(), games.end(), [&recentPath](const GameEntry& game) {
+            return game.path == recentPath;
+          });
+          if (found != games.end()) {
+            recordRecent(found->path);
+            launchPath = found->path;
+            break;
+          }
+        }
+        if (launchPath.empty()) std::snprintf(status, sizeof(status), "No previously played game found");
+      } else if (selectedIndex <= 3) {
+        filter = selectedIndex == 1 ? Filter::All : (selectedIndex == 2 ? Filter::Favorites : Filter::Recent);
         screen = Screen::Games;
         selectedIndex = 0;
         visibleStart = 0;
         rebuildVisibleGames();
-      } else if (selectedIndex == 3) {
+      } else if (selectedIndex == 4) {
         screen = Screen::Settings;
         selectedIndex = 0;
         visibleStart = 0;
         loadGameBoyUserSettings(settings, settingsForCgb);
-      } else if (selectedIndex == 4) {
+      } else if (selectedIndex == 5) {
         openBluetoothScreen(beginScan);
       } else {
         screen = Screen::SaveManager;
@@ -668,6 +680,7 @@ void GameLibraryActivity::render(RenderLock&&) {
   switch (screen) {
     case Screen::Categories:
       header = tr(STR_GAME_LIBRARY);
+      labels.push_back(tr(STR_GAME_RESUME));
       labels.push_back(std::string(tr(STR_GAME_ALL)) + " (" + std::to_string(games.size()) + ")");
       labels.push_back(std::string(tr(STR_GAME_FAVORITES)) + " (" +
                        std::to_string(std::count_if(games.begin(), games.end(), [this](const GameEntry& g) {
