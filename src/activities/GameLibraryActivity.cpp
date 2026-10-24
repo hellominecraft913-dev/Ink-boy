@@ -359,6 +359,7 @@ void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginS
         selectedIndex = 0;
         visibleStart = 0;
         confirmDeleteSave = false;
+        pendingDeletePath.clear();
       }
       break;
 
@@ -398,10 +399,16 @@ void GameLibraryActivity::activateSelected(std::string& launchPath, bool& beginS
           std::snprintf(status, sizeof(status), "No save file exists for this game");
         } else if (!confirmDeleteSave) {
           confirmDeleteSave = true;
+          pendingDeletePath = games[selectedIndex].path;
           std::snprintf(status, sizeof(status), "Confirm deletes this save; Back cancels");
+        } else if (pendingDeletePath != games[selectedIndex].path) {
+          confirmDeleteSave = false;
+          pendingDeletePath.clear();
+          std::snprintf(status, sizeof(status), "Selection changed; deletion cancelled");
         } else {
           const bool deleted = deleteSelectedSave();
           confirmDeleteSave = false;
+          pendingDeletePath.clear();
           std::snprintf(status, sizeof(status), "%s", deleted ? "Save removed" : "Could not remove save");
         }
       }
@@ -553,6 +560,7 @@ void GameLibraryActivity::loop() {
     if (mappedInput.wasReleased(Button::Back)) {
       if (confirmDeleteSave) {
         confirmDeleteSave = false;
+        pendingDeletePath.clear();
         std::snprintf(status, sizeof(status), "Save deletion cancelled");
         changed = true;
       } else if (screen == Screen::Categories) {
@@ -566,11 +574,17 @@ void GameLibraryActivity::loop() {
       }
     } else if (mappedInput.wasReleased(Button::Up) && count > 0) {
       selectedIndex = selectedIndex == 0 ? count - 1 : selectedIndex - 1;
-      if (confirmDeleteSave) confirmDeleteSave = false;
+      if (confirmDeleteSave) {
+        confirmDeleteSave = false;
+        pendingDeletePath.clear();
+      }
       changed = true;
     } else if (mappedInput.wasReleased(Button::Down) && count > 0) {
       selectedIndex = (selectedIndex + 1) % count;
-      if (confirmDeleteSave) confirmDeleteSave = false;
+      if (confirmDeleteSave) {
+        confirmDeleteSave = false;
+        pendingDeletePath.clear();
+      }
       changed = true;
     } else if (screen == Screen::Games && mappedInput.wasReleased(Button::Left)) {
       filter = static_cast<Filter>((static_cast<uint8_t>(filter) + 2) % 3);
@@ -592,6 +606,7 @@ void GameLibraryActivity::loop() {
       const std::string savePath = savePathForRom(games[selectedIndex].path);
       if (Storage.exists(savePath.c_str())) {
         confirmDeleteSave = true;
+        pendingDeletePath = games[selectedIndex].path;
         std::snprintf(status, sizeof(status), "Confirm deletes this save; Back cancels");
       } else {
         std::snprintf(status, sizeof(status), "No save file exists for this game");

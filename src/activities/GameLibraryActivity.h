@@ -46,6 +46,7 @@ class GameLibraryActivity final : public Activity {
   uint8_t lastBluetoothDeviceCount = 0;
   bool awaitingControllerMapping = false;
   bool confirmDeleteSave = false;
+  std::string pendingDeletePath;
   bool lastBluetoothConnected = false;
 
   void scanDirectory(const std::string& path, unsigned depth);
