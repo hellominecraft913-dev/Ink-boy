@@ -157,6 +157,7 @@ void GameBoyActivity::onEnter() {
   loadGameBoyUserSettings(userSettings);
   portrait = userSettings.layout == 0;
   touchControlsEnabled = userSettings.touchControls != 0;
+  bluetoothUsages = userSettings.controllerUsages;
   refreshPreset = 0;
   bluetoothJoypadMask = 0;
   for (auto& held : bluetoothHeldButtons) held = {};
@@ -1031,16 +1032,16 @@ void GameBoyActivity::handleInput() {
   if (BleHid.isRunning()) {
     BleHid.poll();
     auto bitForUsage = [this](const uint8_t usage) -> uint8_t {
+      const uint8_t bits[] = {
+          joypadBitForTouch(TouchControl::Up), joypadBitForTouch(TouchControl::Down),
+          joypadBitForTouch(TouchControl::Left), joypadBitForTouch(TouchControl::Right),
+          joypadBitForTouch(TouchControl::A), joypadBitForTouch(TouchControl::B),
+          joypadBitForTouch(TouchControl::Start), joypadBitForTouch(TouchControl::Select)};
+      for (size_t i = 0; i < bluetoothUsages.size(); ++i) {
+        if (bluetoothUsages[i] == usage) return bits[i];
+      }
+      // The SDK also translates one common gamepad axis-pair into synthetic usages.
       switch (usage) {
-        case 0x52: return joypadBitForTouch(TouchControl::Up);     // HID Up Arrow
-        case 0x51: return joypadBitForTouch(TouchControl::Down);   // HID Down Arrow
-        case 0x50: return joypadBitForTouch(TouchControl::Left);   // HID Left Arrow
-        case 0x4F: return joypadBitForTouch(TouchControl::Right);  // HID Right Arrow
-        case 0x1B: return joypadBitForTouch(TouchControl::A);      // X -> A
-        case 0x1D: return joypadBitForTouch(TouchControl::B);      // Z -> B
-        case 0x28: case 0x2C: return joypadBitForTouch(TouchControl::Start);
-        case 0x29: case 0x2B: return joypadBitForTouch(TouchControl::Select);
-        // The SDK decodes one common axis-pair BLE gamepad into synthetic usages.
         case 0x43: return joypadBitForTouch(TouchControl::Up);
         case 0x45: return joypadBitForTouch(TouchControl::Down);
         case 0x41: case 0x42: return joypadBitForTouch(TouchControl::Left);

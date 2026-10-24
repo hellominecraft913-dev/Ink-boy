@@ -119,6 +119,7 @@ bool useWalnutCgb = false;
     uint8_t bit = 0;
   };
   std::array<BluetoothHeldButton, 8> bluetoothHeldButtons{};
+  std::array<uint8_t, 8> bluetoothUsages{{0x52, 0x51, 0x50, 0x4F, 0x1B, 0x1D, 0x28, 0x29}};
   bool touchControlsEnabled = true;
 
   int scale = 3;
