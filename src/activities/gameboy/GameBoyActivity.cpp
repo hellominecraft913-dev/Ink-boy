@@ -1,4 +1,11 @@
 #include "GameBoyActivity.h"
+#include "GameBoySettingsStore.h"
+#if !defined(SIMULATOR) && defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include <BleKeyboardHost.h>
+#define INKBOY_HAS_BLE_HID 1
+#else
+#define INKBOY_HAS_BLE_HID 0
+#endif
 
 #if CROSSINK_GAMEBOY
 
@@ -146,10 +153,24 @@ void GameBoyActivity::onEnter() {
   error[0] = '\0';
   title[0] = '\0';
 
-  portrait = true;
+  GameBoyUserSettings userSettings;
+  loadGameBoyUserSettings(userSettings);
+  portrait = userSettings.layout == 0;
+  touchControlsEnabled = userSettings.touchControls != 0;
+  refreshPreset = 0;
+  bluetoothJoypadMask = 0;
+  for (auto& held : bluetoothHeldButtons) held = {};
   rotateRequested = false;
-  renderer.setOrientation(GfxRenderer::Portrait);
+  renderer.setOrientation(portrait ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
   setLayout();
+#if INKBOY_HAS_BLE_HID
+  if (userSettings.bluetoothEnabled) {
+    if (BleHid.isStopping()) BleHid.end(1500);
+    if (!BleHid.isRunning() && !BleHid.isStopping() && !BleHid.begin("Ink-boy")) {
+      LOG_ERR(TAG, "Could not initialize BLE HID host");
+    }
+  }
+#endif
   renderer.clearScreen(0xFF);
   chromeKey = CHROME_NONE;
 
@@ -222,9 +243,17 @@ if (title[0] == '\0') {
   nextDisplayUs = nowUs + DISPLAY_PERIOD_US;
   nextAutosaveUs = nowUs + AUTOSAVE_PERIOD_US;
   perfWindowStartUs = perfSessionStartUs = nowUs;
-  if (fastRefreshValidated()) {
-    refreshPreset = 1;
-    applyRefreshPreset();
+  if (userSettings.refresh == 2 ||
+      (userSettings.refresh == 0 && fastRefreshValidated())) {
+    if (fastRefreshValidated()) {
+      refreshPreset = 1;
+      applyRefreshPreset();
+    } else {
+      refreshPreset = 0;
+      LOG_INF(TAG, "Fast refresh is unsupported on this panel; using stock refresh");
+    }
+  } else {
+    refreshPreset = 0;
   }
   startEmuTask();
   LOG_INF(TAG, "Started %s (%u bytes, save=%u bytes)", title, static_cast<unsigned>(romSize),
@@ -239,6 +268,13 @@ void GameBoyActivity::onExit() {
   }
   TouchRegistry::getInstance().clear();
   cleanup();
+#if INKBOY_HAS_BLE_HID
+  if (BleHid.isRunning() || BleHid.isStopping()) {
+    if (!BleHid.end(1500) && !BleHid.end(1500)) {
+      LOG_ERR(TAG, "BLE HID host teardown is still pending");
+    }
+  }
+#endif
   if (refreshPreset != 0) {
     refreshPreset = 0;
 #ifndef SIMULATOR
@@ -378,8 +414,9 @@ void GameBoyActivity::render(RenderLock&&) {
   // The framebuffer keeps the title and buttons from the last picture (the
   // display is single-buffered): clear and redraw them only when they change,
   // and with every cleaning refresh in case anything else drew on the screen.
-  const uint32_t chrome = static_cast<uint32_t>(physicalJoypadMask | touchJoypadMask) |
-                          (static_cast<uint32_t>(activeTouch) << 8) | (portrait ? 0x10000u : 0u);
+  const uint32_t chrome = static_cast<uint32_t>(physicalJoypadMask | touchJoypadMask | bluetoothJoypadMask) |
+                          (static_cast<uint32_t>(activeTouch) << 8) | (portrait ? 0x10000u : 0u) |
+                          (touchControlsEnabled ? 0x20000u : 0u);
   const bool redrawChrome = cleaning || chrome != chromeKey;
   if (redrawChrome) renderer.clearScreen(0xFF);
   drawGameFrame();
@@ -667,6 +704,10 @@ void GameBoyActivity::rotate() {
     renderer.setOrientation(portrait ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
     setLayout();
   }
+  GameBoyUserSettings settings;
+  loadGameBoyUserSettings(settings);
+  settings.layout = portrait ? 0 : 1;
+  saveGameBoyUserSettings(settings);
   fullRefreshDue.store(true, std::memory_order_release);
   displayDue.store(true, std::memory_order_release);
   requestUpdate();
@@ -971,6 +1012,8 @@ if (cartRam) {
   cartRamSize = 0;
   physicalJoypadMask = 0;
   touchJoypadMask = 0;
+  bluetoothJoypadMask = 0;
+  for (auto& held : bluetoothHeldButtons) held = {};
   activeTouch = TouchControl::None;
   saveDirty = false;
 }
@@ -984,6 +1027,61 @@ void GameBoyActivity::showError(const char* message) {
 }
 
 void GameBoyActivity::handleInput() {
+#if INKBOY_HAS_BLE_HID
+  if (BleHid.isRunning()) {
+    BleHid.poll();
+    auto bitForUsage = [this](const uint8_t usage) -> uint8_t {
+      switch (usage) {
+        case 0x52: return joypadBitForTouch(TouchControl::Up);     // HID Up Arrow
+        case 0x51: return joypadBitForTouch(TouchControl::Down);   // HID Down Arrow
+        case 0x50: return joypadBitForTouch(TouchControl::Left);   // HID Left Arrow
+        case 0x4F: return joypadBitForTouch(TouchControl::Right);  // HID Right Arrow
+        case 0x1B: return joypadBitForTouch(TouchControl::A);      // X -> A
+        case 0x1D: return joypadBitForTouch(TouchControl::B);      // Z -> B
+        case 0x28: case 0x2C: return joypadBitForTouch(TouchControl::Start);
+        case 0x29: case 0x2B: return joypadBitForTouch(TouchControl::Select);
+        // The SDK decodes one common axis-pair BLE gamepad into synthetic usages.
+        case 0x43: return joypadBitForTouch(TouchControl::Up);
+        case 0x45: return joypadBitForTouch(TouchControl::Down);
+        case 0x41: case 0x42: return joypadBitForTouch(TouchControl::Left);
+        case 0x46: return joypadBitForTouch(TouchControl::Right);
+        case 0x47: return joypadBitForTouch(TouchControl::A);
+        case 0x48: return joypadBitForTouch(TouchControl::B);
+        default: return 0;
+      }
+    };
+
+    freeink::RawButtonEvent event;
+    while (BleHid.popRawButton(event)) {
+      const uint32_t code = event.code();
+      if (event.pressed) {
+        const uint8_t bit = event.wasRest ? 0 : bitForUsage(event.keycode);
+        if (bit) {
+          size_t slot = bluetoothHeldButtons.size();
+          for (size_t i = 0; i < bluetoothHeldButtons.size(); ++i) {
+            if (bluetoothHeldButtons[i].code == code) { slot = i; break; }
+            if (slot == bluetoothHeldButtons.size() && bluetoothHeldButtons[i].code == 0) slot = i;
+          }
+          if (slot < bluetoothHeldButtons.size()) bluetoothHeldButtons[slot] = {code, bit};
+        }
+      } else {
+        // Releases keep the original event code even when keycode is zero. This
+        // also releases synthetic axis-pair taps and rest-filtered button events.
+        for (auto& held : bluetoothHeldButtons) {
+          if (held.code == code) held = {};
+        }
+      }
+
+      uint8_t nextBluetooth = 0;
+      for (const auto& held : bluetoothHeldButtons) nextBluetooth |= held.bit;
+      if (nextBluetooth != bluetoothJoypadMask) {
+        bluetoothJoypadMask = nextBluetooth;
+        applyJoypad();
+      }
+    }
+  }
+#endif
+
   using Button = MappedInputManager::Button;
   const Button buttons[] = {Button::Up, Button::Down, Button::Left, Button::Right, Button::Confirm, Button::Back,
                             Button::Power};
@@ -997,23 +1095,26 @@ void GameBoyActivity::handleInput() {
   }
 
 #if CROSSINK_APP_CAP_TOUCH
-  int x = 0;
-  int y = 0;
-  if (mappedInput.wasScreenTouchDown(x, y)) {
-    updateTouch(x, y);
-  }
-
-  if (mappedInput.isScreenTouchHeld(x, y)) {
-    updateTouch(x, y);
-  } else if (mappedInput.wasScreenTouchReleased()) {
+  if (touchControlsEnabled) {
+    int x = 0;
+    int y = 0;
+    if (mappedInput.wasScreenTouchDown(x, y)) updateTouch(x, y);
+    if (mappedInput.isScreenTouchHeld(x, y)) {
+      updateTouch(x, y);
+    } else if (mappedInput.wasScreenTouchReleased()) {
+      activeTouch = TouchControl::None;
+      touchJoypadMask = 0;
+      applyJoypad();
+    }
+  } else {
     activeTouch = TouchControl::None;
     touchJoypadMask = 0;
-    applyJoypad();
   }
 #endif
 }
 
 void GameBoyActivity::updateTouch(const int x, const int y) {
+  if (!touchControlsEnabled) return;
   const TouchControl control = hitTestTouch(x, y);
   if (control == TouchControl::Exit) {
     exitRequested = true;
@@ -1066,7 +1167,7 @@ uint8_t GameBoyActivity::joypadBitForButton(const MappedInputManager::Button but
 
  void GameBoyActivity::applyJoypad() {
   const uint8_t activeLow = static_cast<uint8_t>(
-      ~(physicalJoypadMask | touchJoypadMask));
+      ~(physicalJoypadMask | touchJoypadMask | bluetoothJoypadMask));
 
   if (useWalnutCgb && cgb) {
     walnut_cgb_set_joypad(cgb, activeLow);
@@ -1249,10 +1350,11 @@ bool GameBoyActivity::drawGameFramePortrait(const uint8_t* source, uint8_t* fram
 }
 
 void GameBoyActivity::drawControls() {
-  const uint8_t currentMask = static_cast<uint8_t>(physicalJoypadMask | touchJoypadMask);
+  const uint8_t currentMask = static_cast<uint8_t>(physicalJoypadMask | touchJoypadMask | bluetoothJoypadMask);
 
   renderer.drawRect(gameX - 1, gameY - 1, gameW + 2, gameH + 2, true);
   renderer.drawText(UI_10_FONT_ID, titleX, titleY, title[0] ? title : "GAME BOY", true, EpdFontFamily::BOLD);
+  if (!touchControlsEnabled) return;
   for (size_t i = 0; i < controlCount; ++i) {
     const ControlButton& c = controls[i];
     const uint8_t bit = joypadBitForTouch(c.control);
@@ -1267,6 +1369,7 @@ void GameBoyActivity::drawControls() {
 
 void GameBoyActivity::registerTouchTargets() {
 #if CROSSINK_APP_CAP_TOUCH
+  if (!touchControlsEnabled) return;
   auto& registry = TouchRegistry::getInstance();
   for (size_t i = 0; i < controlCount; ++i) {
     const ControlButton& c = controls[i];
