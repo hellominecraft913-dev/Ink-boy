@@ -717,7 +717,7 @@ void GameBoyActivity::rotate() {
     setLayout();
   }
   GameBoyUserSettings settings;
-  loadGameBoyUserSettings(settings);
+  loadGameBoyUserSettings(settings, useWalnutCgb);
   settings.layout = portrait ? 0 : 1;
   saveGameBoyUserSettings(settings, useWalnutCgb);
   fullRefreshDue.store(true, std::memory_order_release);
