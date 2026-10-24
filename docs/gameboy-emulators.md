@@ -8,9 +8,9 @@
 
 ## Monochrome conversion for the e-ink panel
 
-Walnut-CGB writes palette-index pixels on its LCD callback. In CGB mode, the low six bits select one of Walnut-CGB's 64 RGB565 palette entries (`gb->cgb.fixPalette`). The bridge converts RGB565 to 8-bit luminance using `Y = (299R + 587G + 114B) / 1000`, then applies a 2x2 Bayer threshold. Every emitted pixel is exactly `0` (black) or `3` (white), matching the GameBoyActivity framebuffer convention and ensuring color data never reaches the 1-bit CrossInk panel framebuffer. The 2x2 pattern preserves approximate average brightness at the cost of some visible stippling. DMG-compatible ROMs opened with the CGB core use their four shade values as luminance input to the same monochrome dither.
+An X4 Pro's monochrome framebuffer cannot display the CGB's original colors, so Walnut-CGB color pixels are converted to 8-bit luminance with `Y = (299R + 587G + 114B) / 1000`. The bridge retains that luminance per 160x144 source pixel rather than converting each source pixel to black/white first. DMG-compatible games routed through Walnut-CGB convert their four shade values into the same luminance range.
 
-The Game Boy render path scales each source pixel by nearest-neighbor expansion; at the native scale of 3x the 2x2 dither pattern is visible as a small ordered pattern.
+When drawing a CGB frame, the renderer expands the luminance image to the final panel pixel grid and uses serpentine Floyd-Steinberg error diffusion to write the 1-bit framebuffer. Dithering after scaling avoids turning a 2x2 source-pixel pattern into enlarged dot clusters. Some grain remains unavoidable on a 1-bit panel; this aims for less regular, finer-grained tones. The normal Peanut-GB `.gb` renderer is unchanged.
 
 ## Why a C bridge is used
 
@@ -22,4 +22,4 @@ Peanut-GB and Walnut-CGB share C types and public symbol names (`struct gb_s`, `
 
 ## Testing
 
-A host-side smoke test should validate that a synthetic CGB ROM initializes, frame callbacks arrive, and every callback pixel is either `0` or `3`. The ESP32-S3 PlatformIO build and physical panel/touch test still need to be performed in a Windows/PlatformIO environment with CrossInk's `freeink-sdk` submodule initialized.
+Check that RGB565 white maps to luminance 255, RGB565 black maps to luminance 0, and DMG shade 0 (white) maps to 255 while shade 3 (black) maps to 0. Then run `pio run -e x4-pro` and test several CGB titles in portrait and landscape. The framebuffer should still contain only black/white bits, while the frame input for Walnut-CGB is grayscale. Physical-panel comparisons are still required to tune the threshold and tone balance.

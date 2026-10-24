@@ -1,4 +1,11 @@
 #include "GameBoyActivity.h"
+#include "../GameBoySettingsStore.h"
+#if !defined(SIMULATOR) && defined(FREEINK_DEVICE_X4PRO) && FREEINK_DEVICE_X4PRO
+#include <BleKeyboardHost.h>
+#define INKBOY_HAS_BLE_HID 1
+#else
+#define INKBOY_HAS_BLE_HID 0
+#endif
 
 #if CROSSINK_GAMEBOY
 
@@ -146,9 +153,17 @@ void GameBoyActivity::onEnter() {
   error[0] = '\0';
   title[0] = '\0';
 
-  portrait = true;
+  const bool settingsProfileCgb = FsHelpers::checkFileExtension(romPath, ".gbc");
+  GameBoyUserSettings userSettings;
+  loadGameBoyUserSettings(userSettings, settingsProfileCgb);
+  portrait = userSettings.layout == 0;
+  touchControlsEnabled = userSettings.touchControls != 0;
+  bluetoothUsages = userSettings.controllerUsages;
+  refreshPreset = 0;
+  bluetoothJoypadMask = 0;
+  for (auto& held : bluetoothHeldButtons) held = {};
   rotateRequested = false;
-  renderer.setOrientation(GfxRenderer::Portrait);
+  renderer.setOrientation(portrait ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
   setLayout();
   renderer.clearScreen(0xFF);
   chromeKey = CHROME_NONE;
@@ -167,6 +182,24 @@ if (!loadRom()) {
 useWalnutCgb =
     FsHelpers::checkFileExtension(romPath, ".gbc") ||
     ((rom[0x143] & 0x80U) != 0);
+
+if (useWalnutCgb != settingsProfileCgb) {
+  loadGameBoyUserSettings(userSettings, useWalnutCgb);
+  portrait = userSettings.layout == 0;
+  touchControlsEnabled = userSettings.touchControls != 0;
+  bluetoothUsages = userSettings.controllerUsages;
+  renderer.setOrientation(portrait ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
+  setLayout();
+}
+
+#if INKBOY_HAS_BLE_HID
+if (userSettings.bluetoothEnabled) {
+  if (BleHid.isStopping()) BleHid.end(1500);
+  if (!BleHid.isRunning() && !BleHid.isStopping() && !BleHid.begin("Ink-boy")) {
+    LOG_ERR(TAG, "Could not initialize BLE HID host");
+  }
+}
+#endif
 
 if (!buildSavePaths() || !initEmulator() || !loadSave()) {
   return;
@@ -222,9 +255,17 @@ if (title[0] == '\0') {
   nextDisplayUs = nowUs + DISPLAY_PERIOD_US;
   nextAutosaveUs = nowUs + AUTOSAVE_PERIOD_US;
   perfWindowStartUs = perfSessionStartUs = nowUs;
-  if (fastRefreshValidated()) {
-    refreshPreset = 1;
-    applyRefreshPreset();
+  if (userSettings.refresh == 2 ||
+      (userSettings.refresh == 0 && fastRefreshValidated())) {
+    if (fastRefreshValidated()) {
+      refreshPreset = 1;
+      applyRefreshPreset();
+    } else {
+      refreshPreset = 0;
+      LOG_INF(TAG, "Fast refresh is unsupported on this panel; using stock refresh");
+    }
+  } else {
+    refreshPreset = 0;
   }
   startEmuTask();
   LOG_INF(TAG, "Started %s (%u bytes, save=%u bytes)", title, static_cast<unsigned>(romSize),
@@ -239,6 +280,13 @@ void GameBoyActivity::onExit() {
   }
   TouchRegistry::getInstance().clear();
   cleanup();
+#if INKBOY_HAS_BLE_HID
+  if (BleHid.isRunning() || BleHid.isStopping()) {
+    if (!BleHid.end(1500) && !BleHid.end(1500)) {
+      LOG_ERR(TAG, "BLE HID host teardown is still pending");
+    }
+  }
+#endif
   if (refreshPreset != 0) {
     refreshPreset = 0;
 #ifndef SIMULATOR
@@ -378,8 +426,9 @@ void GameBoyActivity::render(RenderLock&&) {
   // The framebuffer keeps the title and buttons from the last picture (the
   // display is single-buffered): clear and redraw them only when they change,
   // and with every cleaning refresh in case anything else drew on the screen.
-  const uint32_t chrome = static_cast<uint32_t>(physicalJoypadMask | touchJoypadMask) |
-                          (static_cast<uint32_t>(activeTouch) << 8) | (portrait ? 0x10000u : 0u);
+  const uint32_t chrome = static_cast<uint32_t>(physicalJoypadMask | touchJoypadMask | bluetoothJoypadMask) |
+                          (static_cast<uint32_t>(activeTouch) << 8) | (portrait ? 0x10000u : 0u) |
+                          (touchControlsEnabled ? 0x20000u : 0u);
   const bool redrawChrome = cleaning || chrome != chromeKey;
   if (redrawChrome) renderer.clearScreen(0xFF);
   drawGameFrame();
@@ -667,6 +716,10 @@ void GameBoyActivity::rotate() {
     renderer.setOrientation(portrait ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
     setLayout();
   }
+  GameBoyUserSettings settings;
+  loadGameBoyUserSettings(settings, useWalnutCgb);
+  settings.layout = portrait ? 0 : 1;
+  saveGameBoyUserSettings(settings, useWalnutCgb);
   fullRefreshDue.store(true, std::memory_order_release);
   displayDue.store(true, std::memory_order_release);
   requestUpdate();
@@ -971,6 +1024,8 @@ if (cartRam) {
   cartRamSize = 0;
   physicalJoypadMask = 0;
   touchJoypadMask = 0;
+  bluetoothJoypadMask = 0;
+  for (auto& held : bluetoothHeldButtons) held = {};
   activeTouch = TouchControl::None;
   saveDirty = false;
 }
@@ -984,6 +1039,61 @@ void GameBoyActivity::showError(const char* message) {
 }
 
 void GameBoyActivity::handleInput() {
+#if INKBOY_HAS_BLE_HID
+  if (BleHid.isRunning()) {
+    BleHid.poll();
+    auto bitForUsage = [this](const uint8_t usage) -> uint8_t {
+      const uint8_t bits[] = {
+          joypadBitForTouch(TouchControl::Up), joypadBitForTouch(TouchControl::Down),
+          joypadBitForTouch(TouchControl::Left), joypadBitForTouch(TouchControl::Right),
+          joypadBitForTouch(TouchControl::A), joypadBitForTouch(TouchControl::B),
+          joypadBitForTouch(TouchControl::Start), joypadBitForTouch(TouchControl::Select)};
+      for (size_t i = 0; i < bluetoothUsages.size(); ++i) {
+        if (bluetoothUsages[i] == usage) return bits[i];
+      }
+      // The SDK also translates one common gamepad axis-pair into synthetic usages.
+      switch (usage) {
+        case 0x43: return joypadBitForTouch(TouchControl::Up);
+        case 0x45: return joypadBitForTouch(TouchControl::Down);
+        case 0x41: case 0x42: return joypadBitForTouch(TouchControl::Left);
+        case 0x46: return joypadBitForTouch(TouchControl::Right);
+        case 0x47: return joypadBitForTouch(TouchControl::A);
+        case 0x48: return joypadBitForTouch(TouchControl::B);
+        default: return 0;
+      }
+    };
+
+    freeink::RawButtonEvent event;
+    while (BleHid.popRawButton(event)) {
+      const uint32_t code = event.code();
+      if (event.pressed) {
+        const uint8_t bit = event.wasRest ? 0 : bitForUsage(event.keycode);
+        if (bit) {
+          size_t slot = bluetoothHeldButtons.size();
+          for (size_t i = 0; i < bluetoothHeldButtons.size(); ++i) {
+            if (bluetoothHeldButtons[i].code == code) { slot = i; break; }
+            if (slot == bluetoothHeldButtons.size() && bluetoothHeldButtons[i].code == 0) slot = i;
+          }
+          if (slot < bluetoothHeldButtons.size()) bluetoothHeldButtons[slot] = {code, bit};
+        }
+      } else {
+        // Releases keep the original event code even when keycode is zero. This
+        // also releases synthetic axis-pair taps and rest-filtered button events.
+        for (auto& held : bluetoothHeldButtons) {
+          if (held.code == code) held = {};
+        }
+      }
+
+      uint8_t nextBluetooth = 0;
+      for (const auto& held : bluetoothHeldButtons) nextBluetooth |= held.bit;
+      if (nextBluetooth != bluetoothJoypadMask) {
+        bluetoothJoypadMask = nextBluetooth;
+        applyJoypad();
+      }
+    }
+  }
+#endif
+
   using Button = MappedInputManager::Button;
   const Button buttons[] = {Button::Up, Button::Down, Button::Left, Button::Right, Button::Confirm, Button::Back,
                             Button::Power};
@@ -997,23 +1107,26 @@ void GameBoyActivity::handleInput() {
   }
 
 #if CROSSINK_APP_CAP_TOUCH
-  int x = 0;
-  int y = 0;
-  if (mappedInput.wasScreenTouchDown(x, y)) {
-    updateTouch(x, y);
-  }
-
-  if (mappedInput.isScreenTouchHeld(x, y)) {
-    updateTouch(x, y);
-  } else if (mappedInput.wasScreenTouchReleased()) {
+  if (touchControlsEnabled) {
+    int x = 0;
+    int y = 0;
+    if (mappedInput.wasScreenTouchDown(x, y)) updateTouch(x, y);
+    if (mappedInput.isScreenTouchHeld(x, y)) {
+      updateTouch(x, y);
+    } else if (mappedInput.wasScreenTouchReleased()) {
+      activeTouch = TouchControl::None;
+      touchJoypadMask = 0;
+      applyJoypad();
+    }
+  } else {
     activeTouch = TouchControl::None;
     touchJoypadMask = 0;
-    applyJoypad();
   }
 #endif
 }
 
 void GameBoyActivity::updateTouch(const int x, const int y) {
+  if (!touchControlsEnabled) return;
   const TouchControl control = hitTestTouch(x, y);
   if (control == TouchControl::Exit) {
     exitRequested = true;
@@ -1066,7 +1179,7 @@ uint8_t GameBoyActivity::joypadBitForButton(const MappedInputManager::Button but
 
  void GameBoyActivity::applyJoypad() {
   const uint8_t activeLow = static_cast<uint8_t>(
-      ~(physicalJoypadMask | touchJoypadMask));
+      ~(physicalJoypadMask | touchJoypadMask | bluetoothJoypadMask));
 
   if (useWalnutCgb && cgb) {
     walnut_cgb_set_joypad(cgb, activeLow);
@@ -1188,6 +1301,62 @@ void gamePatterns(uint8_t (&patterns)[2][4][2], const int scale, const bool alon
   }
 }
 
+// Walnut-CGB supplies 8-bit luminance per Game Boy pixel. Dither only after
+// scaling to the panel's pixel grid; this avoids enlarging a 2x2 pattern into
+// obvious 3x3 dot clusters. The target is a 1-bit framebuffer (1=white).
+bool drawCgbFloydSteinberg(const uint8_t* source, uint8_t* framebuffer, const int gameX, const int gameY,
+                           const int scale, const int panelBytes, const int panelHeight, const bool portrait) {
+  constexpr int kSourceWidth = 160;
+  constexpr int kSourceHeight = 144;
+  constexpr int kMaxOutputWidth = kSourceWidth * 3;
+  if (!source || !framebuffer || scale < 1 || scale > 3 || panelBytes <= 0 || panelHeight <= 0) return false;
+
+  const int outputWidth = kSourceWidth * scale;
+  const int outputHeight = kSourceHeight * scale;
+  int errorA[kMaxOutputWidth + 2] = {};
+  int errorB[kMaxOutputWidth + 2] = {};
+  int* current = errorA;
+  int* next = errorB;
+
+  for (int py = 0; py < outputHeight; ++py) {
+    const bool leftToRight = (py & 1) == 0;
+    for (int i = 0; i < outputWidth; ++i) {
+      const int px = leftToRight ? i : outputWidth - 1 - i;
+      const uint8_t luminance = source[(py / scale) * kSourceWidth + (px / scale)];
+      int adjusted = static_cast<int>(luminance) * 16 + current[px + 1];
+      adjusted = std::clamp(adjusted, 0, 255 * 16);
+      const bool white = adjusted >= 128 * 16;
+      const int error = adjusted - (white ? 255 * 16 : 0);
+
+      const int panelRow = portrait ? panelHeight - 1 - (gameX + px) : gameY + py;
+      const int panelColumn = portrait ? gameY + py : gameX + px;
+      uint8_t* destination = framebuffer + static_cast<size_t>(panelRow) * panelBytes + panelColumn / 8;
+      const uint8_t mask = static_cast<uint8_t>(0x80U >> (panelColumn & 7));
+      if (white) {
+        *destination |= mask;
+      } else {
+        *destination &= static_cast<uint8_t>(~mask);
+      }
+
+      // Serpentine Floyd-Steinberg error distribution, in fixed-point units.
+      if (leftToRight) {
+        if (px + 1 < outputWidth) current[px + 2] += (error * 7) / 16;
+        if (px > 0) next[px] += (error * 3) / 16;
+        next[px + 1] += (error * 5) / 16;
+        if (px + 1 < outputWidth) next[px + 2] += error / 16;
+      } else {
+        if (px > 0) current[px] += (error * 7) / 16;
+        if (px + 1 < outputWidth) next[px + 2] += (error * 3) / 16;
+        next[px + 1] += (error * 5) / 16;
+        if (px > 0) next[px] += error / 16;
+      }
+    }
+    std::swap(current, next);
+    std::fill(next, next + outputWidth + 2, 0);
+  }
+  return true;
+}
+
 }  // namespace
 
 bool GameBoyActivity::drawGameFrameLandscape(const uint8_t* source, uint8_t* framebuffer) {
@@ -1201,6 +1370,10 @@ bool GameBoyActivity::drawGameFrameLandscape(const uint8_t* source, uint8_t* fra
   if (panelBytes <= 0 || screenW <= 0 || gameX < 0 || gameX % 8 != 0 || gameX + gameW > screenW ||
       rowBytes > MAX_GAME_ROW_BYTES) {
     return false;
+  }
+  if (useWalnutCgb) {
+    return drawCgbFloydSteinberg(source, framebuffer, gameX, gameY, scale, panelBytes,
+                                  renderer.getDisplayHeight(), false);
   }
   uint8_t patterns[2][4][2];
   gamePatterns(patterns, scale, /*alongIsX=*/true);
@@ -1232,6 +1405,9 @@ bool GameBoyActivity::drawGameFramePortrait(const uint8_t* source, uint8_t* fram
       gameY + gameH > panelW || rowBytes > MAX_GAME_ROW_BYTES) {
     return false;
   }
+  if (useWalnutCgb) {
+    return drawCgbFloydSteinberg(source, framebuffer, gameX, gameY, scale, panelBytes, panelH, true);
+  }
   uint8_t patterns[2][4][2];
   gamePatterns(patterns, scale, /*alongIsX=*/false);
   uint8_t rows[2][MAX_GAME_ROW_BYTES];
@@ -1249,10 +1425,11 @@ bool GameBoyActivity::drawGameFramePortrait(const uint8_t* source, uint8_t* fram
 }
 
 void GameBoyActivity::drawControls() {
-  const uint8_t currentMask = static_cast<uint8_t>(physicalJoypadMask | touchJoypadMask);
+  const uint8_t currentMask = static_cast<uint8_t>(physicalJoypadMask | touchJoypadMask | bluetoothJoypadMask);
 
   renderer.drawRect(gameX - 1, gameY - 1, gameW + 2, gameH + 2, true);
   renderer.drawText(UI_10_FONT_ID, titleX, titleY, title[0] ? title : "GAME BOY", true, EpdFontFamily::BOLD);
+  if (!touchControlsEnabled) return;
   for (size_t i = 0; i < controlCount; ++i) {
     const ControlButton& c = controls[i];
     const uint8_t bit = joypadBitForTouch(c.control);
@@ -1267,6 +1444,7 @@ void GameBoyActivity::drawControls() {
 
 void GameBoyActivity::registerTouchTargets() {
 #if CROSSINK_APP_CAP_TOUCH
+  if (!touchControlsEnabled) return;
   auto& registry = TouchRegistry::getInstance();
   for (size_t i = 0; i < controlCount; ++i) {
     const ControlButton& c = controls[i];

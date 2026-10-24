@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-/* Convert the RGB565 palette values used by Walnut-CGB to display luminance. */
+/* Convert Walnut-CGB's RGB565 palette to 8-bit luminance: 0=black, 255=white. */
 static inline uint8_t walnut_cgb_rgb565_to_luminance(uint16_t color) {
   const uint8_t red5 = (uint8_t)((color >> 11) & 0x1FU);
   const uint8_t green6 = (uint8_t)((color >> 5) & 0x3FU);
@@ -13,16 +13,8 @@ static inline uint8_t walnut_cgb_rgb565_to_luminance(uint16_t color) {
   return (uint8_t)((299U * red + 587U * green + 114U * blue + 500U) / 1000U);
 }
 
-/*
- * Ordered 2x2 Bayer dithering. The only possible outputs are 0 (black) and
- * 3 (white), matching GameBoyActivity's bit-packed monochrome framebuffer.
- */
-static inline uint8_t walnut_cgb_luminance_to_bw(uint8_t luminance, uint_fast8_t x, uint_fast8_t y) {
-  static const uint8_t bayer[2][2] = {{0, 2}, {3, 1}};
-  const uint16_t threshold = (uint16_t)(((uint16_t)(2U * bayer[y & 1U][x & 1U] + 1U) * 255U) / 8U);
-  return luminance > threshold ? 3U : 0U;
-}
-
-static inline uint8_t walnut_cgb_rgb565_to_bw(uint16_t color, uint_fast8_t x, uint_fast8_t y) {
-  return walnut_cgb_luminance_to_bw(walnut_cgb_rgb565_to_luminance(color), x, y);
+/* Walnut's DMG-compatible palette values follow GameBoyActivity's shade order:
+ * 0=white, 1=light grey, 2=dark grey, 3=black. */
+static inline uint8_t walnut_cgb_dmg_shade_to_luminance(uint8_t shade) {
+  return (uint8_t)(255U - ((uint16_t)(shade & 0x03U) * 85U));
 }

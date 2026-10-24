@@ -10,7 +10,7 @@ extern "C" {
 
 typedef struct WalnutCgbContext WalnutCgbContext;
 
-typedef void (*WalnutCgbLineCallback)(void *user, const uint8_t *monochrome_pixels, uint_fast8_t line);
+typedef void (*WalnutCgbLineCallback)(void *user, const uint8_t *grayscale_luminance, uint_fast8_t line);
 typedef void (*WalnutCgbFatalCallback)(void *user, int error_code, uint16_t address);
 
 enum {

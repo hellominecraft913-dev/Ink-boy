@@ -55,7 +55,7 @@ struct WalnutCgbContext {
   WalnutCgbLineCallback line_callback;
   WalnutCgbFatalCallback fatal_callback;
   void *user;
-  uint8_t monochrome_line[160];
+  uint8_t grayscale_line[160];
 };
 
 static struct WalnutCgbContext *context_from_gb(struct gb_s *gb) {
@@ -103,21 +103,18 @@ static void walnut_lcd_draw_line(struct gb_s *gb, const uint8_t *pixels, const u
   if (!ctx || !pixels || line >= 144U || !ctx->line_callback) return;
 
   for (x = 0; x < 160U; ++x) {
-    uint8_t luminance;
     if (gb->cgb.cgbMode) {
-      /* In CGB mode Walnut's line pixels index its 64-entry RGB565 palette:
-       * 0..31 are background palettes; 32..63 are object palettes. */
+      /* CGB pixels index Walnut's 64-entry RGB565 palette (BG then OBJ). Keep
+       * continuous luminance here; dithering is applied after scaling. */
       const uint8_t palette_index = (uint8_t)(pixels[x] & 0x3FU);
-      ctx->monochrome_line[x] = walnut_cgb_rgb565_to_bw(gb->cgb.fixPalette[palette_index], x, line);
-      continue;
+      ctx->grayscale_line[x] = walnut_cgb_rgb565_to_luminance(gb->cgb.fixPalette[palette_index]);
     } else {
-      /* DMG-compatible carts use four logical palette shades in the low bits. */
-      luminance = (uint8_t)(((uint16_t)(pixels[x] & 0x03U) * 255U) / 3U);
+      /* DMG-compatible shade values use 0=white through 3=black. */
+      ctx->grayscale_line[x] = walnut_cgb_dmg_shade_to_luminance(pixels[x]);
     }
-    ctx->monochrome_line[x] = walnut_cgb_luminance_to_bw(luminance, x, line);
   }
 
-  ctx->line_callback(ctx->user, ctx->monochrome_line, line);
+  ctx->line_callback(ctx->user, ctx->grayscale_line, line);
 }
 
 static void walnut_core_error(struct gb_s *gb, const enum gb_error_e error, const uint16_t address) {
