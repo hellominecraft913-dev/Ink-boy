@@ -1,6 +1,6 @@
 [submodule "freeink-sdk"]
 	path = freeink-sdk
-	url = https://github.com/hellominecraft913-dev/ink-boy
+	url = https://github.com/hellominecraft913-dev/freeink-sdk
 	branch = main
 [submodule "assets/tabler-icons"]
 	path = assets/tabler-icons
