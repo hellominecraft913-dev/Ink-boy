@@ -3,6 +3,19 @@
  * Walnut-CGB is vendored from the user-supplied walnut_cgb.h. Its license and
  * upstream/derived-work notices are retained in lib/WalnutCGB/src/walnut_cgb.h.
  */
+
+/* The core is a large switch-based interpreter and this file is its only
+ * translation unit. When the project builds for size (-Os, the PlatformIO
+ * default for firmware sources) that costs this kind of code a good part of its
+ * speed, so this one file is raised to -O2, trading some flash (the app slots
+ * have plenty) for speed. A build already at -O2 or -O3 is left alone: GCC only
+ * defines __OPTIMIZE_SIZE__ under -Os. Must stay above every #include so all
+ * inline helpers share one optimisation level. Define WALNUT_CGB_KEEP_BUILD_OPT
+ * to build with the project's flags regardless. */
+#if !defined(WALNUT_CGB_KEEP_BUILD_OPT) && defined(__GNUC__) && !defined(__clang__) && defined(__OPTIMIZE_SIZE__)
+#pragma GCC optimize("O2")
+#endif
+
 #include "walnut_cgb_port.h"
 #include "walnut_cgb_color.h"
 
@@ -46,6 +59,23 @@
 
 #include <walnut_cgb.h>
 
+/* Where the emulator state (struct gb_s: CPU registers, 32 KB WRAM, 16 KB VRAM,
+ * IO, palettes, about 50 KB in all) lives. Every emulated instruction touches
+ * it, and PSRAM is far slower than internal RAM and shares one cache and bus
+ * with the ROM and both cores. It goes in internal RAM only while a game runs
+ * and only when that leaves at least WALNUT_CGB_INTERNAL_RESERVE_BYTES of
+ * internal heap free (and a contiguous block of the state's size plus
+ * WALNUT_CGB_INTERNAL_BLOCK_MARGIN_BYTES to spare); otherwise it falls back to
+ * PSRAM exactly as before. walnut_cgb_destroy() returns it when the game ends,
+ * so nothing is held while idle. Define WALNUT_CGB_STATE_IN_PSRAM to always use
+ * PSRAM. */
+#ifndef WALNUT_CGB_INTERNAL_RESERVE_BYTES
+#define WALNUT_CGB_INTERNAL_RESERVE_BYTES (128U * 1024U)
+#endif
+#ifndef WALNUT_CGB_INTERNAL_BLOCK_MARGIN_BYTES
+#define WALNUT_CGB_INTERNAL_BLOCK_MARGIN_BYTES (16U * 1024U)
+#endif
+
 struct WalnutCgbContext {
   struct gb_s gb;
   const uint8_t *rom;
@@ -55,6 +85,8 @@ struct WalnutCgbContext {
   WalnutCgbLineCallback line_callback;
   WalnutCgbFatalCallback fatal_callback;
   void *user;
+  WalnutCgbLuminanceCache luminance;
+  int state_in_internal_ram;
   uint8_t grayscale_line[160];
 };
 
@@ -62,27 +94,32 @@ static struct WalnutCgbContext *context_from_gb(struct gb_s *gb) {
   return gb ? (struct WalnutCgbContext *)gb->direct.priv : NULL;
 }
 
-static uint8_t walnut_rom_byte(struct WalnutCgbContext *ctx, uint_fast32_t address) {
-  if (!ctx || !ctx->rom || address >= ctx->rom_size) return 0xFF;
-  return ctx->rom[address];
-}
-
+/* ROM reads: the core calls these for every opcode and operand fetch. The
+ * context is always set (walnut_core_init() stores it before its first ROM
+ * read) and walnut_cgb_create() rejects a NULL ROM, so only the bound is
+ * checked; anything past the end of the image reads as 0xFF as before. */
 static uint8_t walnut_rom_read(struct gb_s *gb, const uint_fast32_t address) {
-  return walnut_rom_byte(context_from_gb(gb), address);
+  const struct WalnutCgbContext *ctx = (const struct WalnutCgbContext *)gb->direct.priv;
+  return address < ctx->rom_size ? ctx->rom[address] : 0xFF;
 }
 
 static uint16_t walnut_rom_read16(struct gb_s *gb, const uint_fast32_t address) {
-  const uint16_t lo = walnut_rom_byte(context_from_gb(gb), address);
-  const uint16_t hi = walnut_rom_byte(context_from_gb(gb), address + 1U);
-  return (uint16_t)(lo | (uint16_t)(hi << 8));
+  const struct WalnutCgbContext *ctx = (const struct WalnutCgbContext *)gb->direct.priv;
+  if (address + 2U <= ctx->rom_size) {
+    const uint8_t *p = ctx->rom + address;
+    return (uint16_t)(p[0] | (uint16_t)(p[1] << 8));
+  }
+  return (uint16_t)(walnut_rom_read(gb, address) | (uint16_t)(walnut_rom_read(gb, address + 1U) << 8));
 }
 
 static uint32_t walnut_rom_read32(struct gb_s *gb, const uint_fast32_t address) {
-  const uint32_t b0 = walnut_rom_byte(context_from_gb(gb), address);
-  const uint32_t b1 = walnut_rom_byte(context_from_gb(gb), address + 1U);
-  const uint32_t b2 = walnut_rom_byte(context_from_gb(gb), address + 2U);
-  const uint32_t b3 = walnut_rom_byte(context_from_gb(gb), address + 3U);
-  return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+  const struct WalnutCgbContext *ctx = (const struct WalnutCgbContext *)gb->direct.priv;
+  if (address + 4U <= ctx->rom_size) {
+    const uint8_t *p = ctx->rom + address;
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+  }
+  return (uint32_t)walnut_rom_read(gb, address) | ((uint32_t)walnut_rom_read(gb, address + 1U) << 8) |
+         ((uint32_t)walnut_rom_read(gb, address + 2U) << 16) | ((uint32_t)walnut_rom_read(gb, address + 3U) << 24);
 }
 
 static uint8_t walnut_cart_ram_read(struct gb_s *gb, const uint_fast32_t address) {
@@ -99,19 +136,17 @@ static void walnut_cart_ram_write(struct gb_s *gb, const uint_fast32_t address, 
 
 static void walnut_lcd_draw_line(struct gb_s *gb, const uint8_t *pixels, const uint_fast8_t line) {
   struct WalnutCgbContext *ctx = context_from_gb(gb);
-  uint_fast8_t x;
   if (!ctx || !pixels || line >= 144U || !ctx->line_callback) return;
 
-  for (x = 0; x < 160U; ++x) {
-    if (gb->cgb.cgbMode) {
-      /* CGB pixels index Walnut's 64-entry RGB565 palette (BG then OBJ). Keep
-       * continuous luminance here; dithering is applied after scaling. */
-      const uint8_t palette_index = (uint8_t)(pixels[x] & 0x3FU);
-      ctx->grayscale_line[x] = walnut_cgb_rgb565_to_luminance(gb->cgb.fixPalette[palette_index]);
-    } else {
-      /* DMG-compatible shade values use 0=white through 3=black. */
-      ctx->grayscale_line[x] = walnut_cgb_dmg_shade_to_luminance(pixels[x]);
-    }
+  if (gb->cgb.cgbMode) {
+    /* CGB pixels index Walnut's 64-entry RGB565 palette (BG then OBJ). Keep
+     * continuous luminance here; dithering is applied after scaling. The
+     * palette-to-luminance table is refreshed only when a palette changed. */
+    walnut_cgb_luminance_cache_sync(&ctx->luminance, gb->cgb.fixPalette);
+    walnut_cgb_convert_cgb_line(&ctx->luminance, pixels, ctx->grayscale_line);
+  } else {
+    /* DMG-compatible shade values use 0=white through 3=black. */
+    walnut_cgb_convert_dmg_line(pixels, ctx->grayscale_line);
   }
 
   ctx->line_callback(ctx->user, ctx->grayscale_line, line);
@@ -124,6 +159,25 @@ static void walnut_core_error(struct gb_s *gb, const enum gb_error_e error, cons
   for (;;) { }
 }
 
+/* Allocates the zeroed emulator context: internal RAM when there is plenty to
+ * spare (see the comment above the context), else PSRAM. */
+static void *walnut_alloc_state(size_t size, int *in_internal_ram) {
+  *in_internal_ram = 0;
+#ifndef WALNUT_CGB_STATE_IN_PSRAM
+  if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) >=
+          size + WALNUT_CGB_INTERNAL_RESERVE_BYTES &&
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) >=
+          size + WALNUT_CGB_INTERNAL_BLOCK_MARGIN_BYTES) {
+    void *memory = heap_caps_calloc(1, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (memory) {
+      *in_internal_ram = 1;
+      return memory;
+    }
+  }
+#endif
+  return heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+
 WalnutCgbContext *walnut_cgb_create(const uint8_t *rom, size_t rom_size,
                                      WalnutCgbLineCallback line_callback,
                                      WalnutCgbFatalCallback fatal_callback,
@@ -131,12 +185,14 @@ WalnutCgbContext *walnut_cgb_create(const uint8_t *rom, size_t rom_size,
   struct WalnutCgbContext *ctx;
   size_t save_size = 0;
   enum gb_init_error_e result;
+  int in_internal_ram = 0;
 
   if (init_result) *init_result = WALNUT_CGB_INIT_OUT_OF_MEMORY;
   if (!rom || rom_size < 0x150U || !line_callback) return NULL;
 
-  ctx = (struct WalnutCgbContext *)heap_caps_calloc(1, sizeof(*ctx), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  ctx = (struct WalnutCgbContext *)walnut_alloc_state(sizeof(*ctx), &in_internal_ram);
   if (!ctx) return NULL;
+  ctx->state_in_internal_ram = in_internal_ram;
   ctx->rom = rom;
   ctx->rom_size = rom_size;
   ctx->line_callback = line_callback;
@@ -200,8 +256,26 @@ uint8_t *walnut_cgb_save_ram(WalnutCgbContext *context) {
   return context ? context->cart_ram : NULL;
 }
 
+int walnut_cgb_state_in_internal_ram(const WalnutCgbContext *context) {
+  return context ? context->state_in_internal_ram : 0;
+}
+
+void walnut_cgb_run_frame_ex(WalnutCgbContext *context, int draw_lines) {
+  if (!context) return;
+  /* The core's own frame-skip switch: __gb_draw_line() returns before touching
+   * anything when frame_skip is set and frame_skip_count is clear. The core
+   * flips frame_skip_count itself at every VBLANK, after all 144 lines of the
+   * frame were (or were not) drawn, so it is set here for each frame. Drawing
+   * has no effect on emulation: the line renderer only reads emulator state,
+   * and the window line counter it advances is cleared at the first line of
+   * every frame. */
+  context->gb.direct.frame_skip = 1;
+  context->gb.display.frame_skip_count = draw_lines ? 1 : 0;
+  walnut_core_run_frame(&context->gb);
+}
+
 void walnut_cgb_run_frame(WalnutCgbContext *context) {
-  if (context) walnut_core_run_frame(&context->gb);
+  walnut_cgb_run_frame_ex(context, 1);
 }
 
 void walnut_cgb_set_joypad(WalnutCgbContext *context, uint8_t active_low_joypad) {

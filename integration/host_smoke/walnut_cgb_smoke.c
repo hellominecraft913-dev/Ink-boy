@@ -8,15 +8,11 @@
 #include "walnut_cgb_color.h"
 
 static unsigned lines;
-static unsigned invalid_values;
 
 static void draw(void *user, const uint8_t *pixels, uint_fast8_t line) {
-  unsigned i;
   (void)user;
+  (void)pixels; /* 8-bit luminance, 0 = black; the value ranges are checked in walnut_cgb_equiv_test.c */
   assert(line < 144);
-  for (i = 0; i < 160; ++i) {
-    if (pixels[i] != 0 && pixels[i] != 3) ++invalid_values;
-  }
   ++lines;
 }
 
@@ -34,44 +30,14 @@ static uint8_t checksum(const uint8_t *rom) {
 }
 
 static void test_color_conversion(void) {
-  static const uint16_t samples[] = {0x0000, 0xFFFF, 0xF800, 0x07E0, 0x001F, 0x8410, 0x7BEF};
-  size_t i;
-  unsigned y;
-  unsigned x;
-  for (i = 0; i < sizeof(samples) / sizeof(samples[0]); ++i) {
-    for (y = 0; y < 2; ++y) {
-      for (x = 0; x < 2; ++x) {
-        uint8_t pixel = walnut_cgb_rgb565_to_bw(samples[i], x, y);
-        assert(pixel == 0 || pixel == 3);
-      }
-    }
-  }
+  /* Luminance of the primaries and the extremes, and the DMG shade ramp. */
+  assert(walnut_cgb_rgb565_to_luminance(0x0000) == 0);
+  assert(walnut_cgb_rgb565_to_luminance(0xFFFF) == 255);
   assert(walnut_cgb_rgb565_to_luminance(0xF800) == 76);  /* red */
   assert(walnut_cgb_rgb565_to_luminance(0x07E0) == 150); /* green */
   assert(walnut_cgb_rgb565_to_luminance(0x001F) == 29);  /* blue */
-  /* Exhaust every RGB565 input and each threshold phase: output is always BW. */
-  {
-    uint32_t color;
-    for (color = 0; color <= 0xFFFFU; ++color) {
-      for (y = 0; y < 2; ++y) {
-        for (x = 0; x < 2; ++x) {
-          const uint8_t pixel = walnut_cgb_rgb565_to_bw((uint16_t)color, x, y);
-          assert(pixel == 0 || pixel == 3);
-        }
-      }
-    }
-  }
-  for (y = 0; y < 2; ++y) {
-    for (x = 0; x < 2; ++x) {
-      assert(walnut_cgb_rgb565_to_bw(0x0000, x, y) == 0);
-      assert(walnut_cgb_rgb565_to_bw(0xFFFF, x, y) == 3);
-    }
-  }
-  /* Mid-gray should use the ordered pattern, not pass gray through. */
-  assert(walnut_cgb_rgb565_to_bw(0x8410, 0, 0) == 3);
-  assert(walnut_cgb_rgb565_to_bw(0x8410, 1, 0) == 0);
-  assert(walnut_cgb_rgb565_to_bw(0x8410, 0, 1) == 0);
-  assert(walnut_cgb_rgb565_to_bw(0x8410, 1, 1) == 3);
+  assert(walnut_cgb_dmg_shade_to_luminance(0) == 255);
+  assert(walnut_cgb_dmg_shade_to_luminance(3) == 0);
 }
 
 int main(void) {
@@ -105,8 +71,7 @@ int main(void) {
   walnut_cgb_set_joypad(ctx, 0xFF);
   for (i = 0; i < 3; ++i) walnut_cgb_run_frame(ctx);
   assert(lines > 0);
-  assert(invalid_values == 0);
-  printf("Walnut-CGB smoke OK: %u scanlines, output strictly black/white, save=%zu\n",
+  printf("Walnut-CGB smoke OK: %u scanlines, save=%zu\n",
          lines, walnut_cgb_save_size(ctx));
   walnut_cgb_destroy(ctx);
   free(rom);

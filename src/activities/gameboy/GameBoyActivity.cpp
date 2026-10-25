@@ -28,6 +28,7 @@
 #include <ctime>
 #include <utility>
 
+#include "CgbDither.h"
 #include "components/TouchRegistry.h"
 #include "fontIds.h"
 #include <FsHelpers.h>
@@ -404,8 +405,18 @@ void GameBoyActivity::emuTaskLoop() {
   }
 }
 
-    // Let CPU 0's idle task (and its watchdog) run between frames.
-    delay(1);
+    // Let CPU 0's idle task (and its watchdog) run between frames. While the
+    // emulator is behind real time the 1 ms sleep is skipped for up to 15 loops
+    // in a row (a yield instead, ~0.4 s at most at the slowest speeds), then
+    // taken once: the idle task still runs many times a second, far inside its
+    // watchdog period, and a slow game stops losing ~1 ms to every frame.
+    if (nowMicros() >= nextFrameUs && behindStreak < 15) {
+      ++behindStreak;
+      yield();
+    } else {
+      behindStreak = 0;
+      delay(1);
+    }
   }
 }
 
@@ -526,9 +537,10 @@ void GameBoyActivity::updatePerf(const uint64_t nowUs) {
   const uint32_t unchanged = perfUnchanged.exchange(0, std::memory_order_relaxed);
   const float perDisplayMs = displays ? 1.0f / displays / 1000.0f : 0.0f;
 
-  LOG_INF(TAG, "perf: emu %.1f fps (%u%%), frame %.1f ms avg %.1f max, waits %u; lcd %.1f/s, draw %.1f ms, "
+  LOG_INF(TAG, "perf: emu %.1f fps (%u%%), frame %.1f ms avg %.1f max, waits %u, drawn %u/%u; lcd %.1f/s, draw %.1f ms, "
           "refresh %.0f ms avg %.0f max; loop %.0f/s, longest gap %u ms",
-          fps, speed, emuMs, perfEmuMaxUs / 1000.0f, static_cast<unsigned>(perfWaits), displays / seconds,
+          fps, speed, emuMs, perfEmuMaxUs / 1000.0f, static_cast<unsigned>(perfWaits),
+          static_cast<unsigned>(perfDrawn), static_cast<unsigned>(perfFrames), displays / seconds,
           displays ? drawUs / 1000.0f / displays : 0.0f, refreshMs, refreshMaxUs / 1000.0f, perfLoops / seconds,
           static_cast<unsigned>(perfLoopMaxGapUs / 1000));
   perfTotalLoopMaxGapUs = std::max(perfTotalLoopMaxGapUs, perfLoopMaxGapUs);
@@ -547,14 +559,14 @@ void GameBoyActivity::updatePerf(const uint64_t nowUs) {
   perfTotalCleanRefreshes += cleanRefreshes;
   perfTotalUnchanged += unchanged;
   for (int i = 0; i < 6; ++i) perfTotalPhaseUs[i] += phaseUs[i];
-  perfFrames = perfWaits = perfEmuUs = perfEmuMaxUs = 0;
+  perfFrames = perfWaits = perfEmuUs = perfEmuMaxUs = perfDrawn = 0;
   perfWindowStartUs = nowUs;
 }
 
 // Starts a new stretch of figures for gameboy-perf.txt (a new preset).
 void GameBoyActivity::resetPerfTotals(const uint64_t nowUs) {
   perfSessionStartUs = perfWindowStartUs = nowUs;
-  perfFrames = perfWaits = perfEmuUs = perfEmuMaxUs = 0;
+  perfFrames = perfWaits = perfEmuUs = perfEmuMaxUs = perfDrawn = 0;
   perfLoops = perfLoopMaxGapUs = 0;
   perfDisplays.store(0);
   perfDrawUs.store(0);
@@ -851,6 +863,16 @@ bool GameBoyActivity::initEmulator() {
     // The CGB context owns this cartridge RAM.
     cartRamSize = walnut_cgb_save_size(cgb);
     cartRam = walnut_cgb_save_ram(cgb);
+
+    // The emulator state goes in internal RAM when plenty is free (it is
+    // returned when the game ends), otherwise in PSRAM; say which, with what
+    // is left, so a speed log can be read against it.
+    LOG_INF(TAG, "Walnut-CGB state in %s; internal heap free %u, largest block %u",
+            walnut_cgb_state_in_internal_ram(cgb) ? "internal RAM" : "PSRAM",
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+    lastConsumeUs32.store(static_cast<uint32_t>(nowMicros()), std::memory_order_relaxed);
+    consumePeriodUs32.store(static_cast<uint32_t>(DISPLAY_PERIOD_US), std::memory_order_relaxed);
   } else {
     // Preserve the original Peanut-GB initialization for .gb ROMs.
     gb = static_cast<gb_s*>(calloc(1, sizeof(gb_s)));
@@ -1255,17 +1277,23 @@ if (nextFrameUs == 0) {
 
   uint8_t ran = 0;
   while (nowUs >= nextFrameUs && ran < MAX_CATCH_UP_FRAMES) {
-    // Do not start a frame in either buffer while the display task owns it,
-    // and do not overwrite the most recently completed frame before it has
-    // been consumed. With two buffers this gives a simple, lock-free handoff.
-    const uint8_t pending = readyFrame.load(std::memory_order_acquire);
-    const uint8_t rendering = renderFrame.load(std::memory_order_acquire);
-    if (writeFrame == pending || writeFrame == rendering) {
-      ++perfWaits;
-      break;
+    // A frame whose scanlines are not composed writes to neither buffer, so it
+    // needs no free one and is never published (see shouldDrawFrame()).
+    const bool draw = shouldDrawFrame(nowUs);
+
+    if (draw) {
+      // Do not start a frame in either buffer while the display task owns it,
+      // and do not overwrite the most recently completed frame before it has
+      // been consumed. With two buffers this gives a simple, lock-free handoff.
+      const uint8_t pending = readyFrame.load(std::memory_order_acquire);
+      const uint8_t rendering = renderFrame.load(std::memory_order_acquire);
+      if (writeFrame == pending || writeFrame == rendering) {
+        ++perfWaits;
+        break;
+      }
     }
 
-        const uint64_t frameStartUs = nowMicros();
+    const uint64_t frameStartUs = nowMicros();
 
     if (useWalnutCgb) {
       if (!cgb) {
@@ -1273,7 +1301,7 @@ if (nextFrameUs == 0) {
         break;
       }
 
-      walnut_cgb_run_frame(cgb);
+      walnut_cgb_run_frame_ex(cgb, draw ? 1 : 0);
     } else {
       if (!gb) {
         LOG_ERR(TAG, "Peanut-GB selected but context is null");
@@ -1287,12 +1315,40 @@ if (nextFrameUs == 0) {
     perfEmuUs += frameUs;
     perfEmuMaxUs = std::max(perfEmuMaxUs, frameUs);
     ++perfFrames;
-    publishCompletedFrame();
+    if (draw) {
+      ++perfDrawn;
+      publishCompletedFrame();
+    }
     nextFrameUs += EMULATION_FRAME_PERIOD_US;
     ++ran;
   }
 
   if (ran == MAX_CATCH_UP_FRAMES && nowUs >= nextFrameUs) nextFrameUs = nowUs + EMULATION_FRAME_PERIOD_US;
+}
+
+// Whether the frame about to be emulated should have its scanlines composed.
+// Always for Peanut-GB (the .gb path is unchanged). For Walnut-CGB: when no
+// finished picture is waiting for the display (so there is always something to
+// show), and from DRAW_LEAD_US before the display is expected to take the next
+// one, judged from how often it has been taking them. When unsure the answer is
+// yes, which is what every frame did before.
+bool GameBoyActivity::shouldDrawFrame(const uint64_t nowUs) const {
+  if (!useWalnutCgb) return true;
+  if (readyFrame.load(std::memory_order_acquire) == 0xFF) return true;
+  const uint32_t sinceConsume = static_cast<uint32_t>(nowUs) - lastConsumeUs32.load(std::memory_order_relaxed);
+  return sinceConsume + DRAW_LEAD_US >= consumePeriodUs32.load(std::memory_order_relaxed);
+}
+
+// Render task: the display just took a picture. Tracks the interval between
+// pictures (a moving average, ignoring pauses such as a menu or an exit).
+void GameBoyActivity::noteFrameConsumed() {
+  const uint32_t nowUs32 = static_cast<uint32_t>(nowMicros());
+  const uint32_t interval = nowUs32 - lastConsumeUs32.load(std::memory_order_relaxed);
+  if (interval >= MIN_CONSUME_PERIOD_US && interval <= MAX_CONSUME_PERIOD_US) {
+    const uint32_t period = consumePeriodUs32.load(std::memory_order_relaxed);
+    consumePeriodUs32.store((period * 3U + interval) / 4U, std::memory_order_relaxed);
+  }
+  lastConsumeUs32.store(nowUs32, std::memory_order_relaxed);
 }
 
 void GameBoyActivity::publishCompletedFrame() {
@@ -1312,6 +1368,7 @@ void GameBoyActivity::drawGameFrame() {
   // this ownership marker before starting its next frame. Keep the claim until
   // the display refresh has consumed the CrossInk framebuffer.
   renderFrame.store(frameIndex, std::memory_order_release);
+  if (useWalnutCgb) noteFrameConsumed();
 
   const bool drawn =
       portrait ? drawGameFramePortrait(source, framebuffer) : drawGameFrameLandscape(source, framebuffer);
@@ -1359,62 +1416,6 @@ void gamePatterns(uint8_t (&patterns)[2][4][2], const int scale, const bool alon
   }
 }
 
-// Walnut-CGB supplies 8-bit luminance per Game Boy pixel. Dither only after
-// scaling to the panel's pixel grid; this avoids enlarging a 2x2 pattern into
-// obvious 3x3 dot clusters. The target is a 1-bit framebuffer (1=white).
-bool drawCgbFloydSteinberg(const uint8_t* source, uint8_t* framebuffer, const int gameX, const int gameY,
-                           const int scale, const int panelBytes, const int panelHeight, const bool portrait) {
-  constexpr int kSourceWidth = 160;
-  constexpr int kSourceHeight = 144;
-  constexpr int kMaxOutputWidth = kSourceWidth * 3;
-  if (!source || !framebuffer || scale < 1 || scale > 3 || panelBytes <= 0 || panelHeight <= 0) return false;
-
-  const int outputWidth = kSourceWidth * scale;
-  const int outputHeight = kSourceHeight * scale;
-  int errorA[kMaxOutputWidth + 2] = {};
-  int errorB[kMaxOutputWidth + 2] = {};
-  int* current = errorA;
-  int* next = errorB;
-
-  for (int py = 0; py < outputHeight; ++py) {
-    const bool leftToRight = (py & 1) == 0;
-    for (int i = 0; i < outputWidth; ++i) {
-      const int px = leftToRight ? i : outputWidth - 1 - i;
-      const uint8_t luminance = source[(py / scale) * kSourceWidth + (px / scale)];
-      int adjusted = static_cast<int>(luminance) * 16 + current[px + 1];
-      adjusted = std::clamp(adjusted, 0, 255 * 16);
-      const bool white = adjusted >= 128 * 16;
-      const int error = adjusted - (white ? 255 * 16 : 0);
-
-      const int panelRow = portrait ? panelHeight - 1 - (gameX + px) : gameY + py;
-      const int panelColumn = portrait ? gameY + py : gameX + px;
-      uint8_t* destination = framebuffer + static_cast<size_t>(panelRow) * panelBytes + panelColumn / 8;
-      const uint8_t mask = static_cast<uint8_t>(0x80U >> (panelColumn & 7));
-      if (white) {
-        *destination |= mask;
-      } else {
-        *destination &= static_cast<uint8_t>(~mask);
-      }
-
-      // Serpentine Floyd-Steinberg error distribution, in fixed-point units.
-      if (leftToRight) {
-        if (px + 1 < outputWidth) current[px + 2] += (error * 7) / 16;
-        if (px > 0) next[px] += (error * 3) / 16;
-        next[px + 1] += (error * 5) / 16;
-        if (px + 1 < outputWidth) next[px + 2] += error / 16;
-      } else {
-        if (px > 0) current[px] += (error * 7) / 16;
-        if (px + 1 < outputWidth) next[px + 2] += (error * 3) / 16;
-        next[px + 1] += (error * 5) / 16;
-        if (px > 0) next[px] += error / 16;
-      }
-    }
-    std::swap(current, next);
-    std::fill(next, next + outputWidth + 2, 0);
-  }
-  return true;
-}
-
 }  // namespace
 
 bool GameBoyActivity::drawGameFrameLandscape(const uint8_t* source, uint8_t* framebuffer) {
@@ -1430,8 +1431,8 @@ bool GameBoyActivity::drawGameFrameLandscape(const uint8_t* source, uint8_t* fra
     return false;
   }
   if (useWalnutCgb) {
-    return drawCgbFloydSteinberg(source, framebuffer, gameX, gameY, scale, panelBytes,
-                                  renderer.getDisplayHeight(), false);
+    return cgbdither::cgbDitherFrame(source, framebuffer, gameX, gameY, scale, panelBytes,
+                                     renderer.getDisplayHeight(), false);
   }
   uint8_t patterns[2][4][2];
   gamePatterns(patterns, scale, /*alongIsX=*/true);
@@ -1464,7 +1465,7 @@ bool GameBoyActivity::drawGameFramePortrait(const uint8_t* source, uint8_t* fram
     return false;
   }
   if (useWalnutCgb) {
-    return drawCgbFloydSteinberg(source, framebuffer, gameX, gameY, scale, panelBytes, panelH, true);
+    return cgbdither::cgbDitherFrame(source, framebuffer, gameX, gameY, scale, panelBytes, panelH, true);
   }
   uint8_t patterns[2][4][2];
   gamePatterns(patterns, scale, /*alongIsX=*/false);

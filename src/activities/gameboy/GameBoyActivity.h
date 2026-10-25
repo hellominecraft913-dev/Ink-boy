@@ -111,6 +111,27 @@ bool useWalnutCgb = false;
   std::atomic<uint8_t> readyFrame{0xFF};
   std::atomic<uint8_t> renderFrame{0xFF};
 
+  // Walnut-CGB only: the display takes a few pictures a second while the
+  // emulator runs ~60 frames a second, so composing the 144 scanlines of every
+  // frame is mostly wasted work. The emulator still runs every frame in full
+  // (CPU, timers, DMA, LCD registers) but composes scanlines only for frames
+  // the display is about to take: from DRAW_LEAD_US before it is expected to
+  // ask again, and whenever no finished picture is waiting. The render task
+  // records when it takes a picture and how often it has been doing so;
+  // both are 32-bit microsecond values (they wrap after ~71 min, which the
+  // unsigned differences below tolerate).
+  static constexpr uint32_t DRAW_LEAD_US = static_cast<uint32_t>(3 * EMULATION_FRAME_PERIOD_US);
+  static constexpr uint32_t MIN_CONSUME_PERIOD_US = 30000U;
+  static constexpr uint32_t MAX_CONSUME_PERIOD_US = 2000000U;
+  std::atomic<uint32_t> lastConsumeUs32{0};
+  std::atomic<uint32_t> consumePeriodUs32{static_cast<uint32_t>(DISPLAY_PERIOD_US)};
+  bool shouldDrawFrame(uint64_t nowUs) const;
+  void noteFrameConsumed();
+  // Emulator task only: frames whose scanlines were composed (for the log) and
+  // consecutive loops that skipped the 1 ms sleep while behind real time.
+  uint32_t perfDrawn = 0;
+  uint8_t behindStreak = 0;
+
   uint8_t physicalJoypadMask = 0;
   uint8_t touchJoypadMask = 0;
   uint8_t bluetoothJoypadMask = 0;
