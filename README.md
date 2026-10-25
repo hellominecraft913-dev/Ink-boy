@@ -13,14 +13,14 @@ This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devi
    
 2. Flash it using a web flasher / SD card
    
-3. Drop your Game Boy or Game Boy Color ROM into the /Books folder.
+3. Drop your Game Boy or Game Boy Color ROM into the SD Card.
    
-4. Click the ROM to launch the emulator.
+4. Go to the Game Library and select your ROM.
 
 
 ## How to use
 
-Simply drop your Game Boy or Game Boy Color ROM into your books folder after flashing, then click on it, simple!
+Simply drop your Game Boy or Game Boy Color ROM into your SD Card after flashing, then click on it in Game Library, simple!
 
 ### Development
 
@@ -40,35 +40,6 @@ pio run -e x4-pro
 ```
 
 
-### Highlights
-
-- New reader fonts: Lexend Deca and Bitter.
-- Music notation and selected supplemental Unicode glyph support to be able to render Project Hail Mary accurately.
-- Added a custom `Minimal` theme and sleep screen option for the minimalists out there.
-- Added a custom `Dashboard` theme and sleep screen option for reading stats enthusiasts.
-- Reader font sizes: 10 pt, 12 pt, 14 pt, and 16 pt.
-- Added ~~strikethrough~~ support.
-- Made <u>underlines</u> thicker for better visibility.
-- Added support for `<hr>` section breaks.
-- Added support for "redaction" style rendering.
-- Added improved support for tables with simple markup.
-- Added ability to add bookmarks.
-- Added ability to remap front buttons that only applies in the reader.
-- Added Focus Reading and Guide Dots as optional reader modes.
-- Added Force Paragraph Indents for books that render as one giant wall of text.
-- Added ability to pin a sleep image as a favorite. The favorited image will always be displayed when your sleep settings are set to `Custom` or `Cover + Custom` (when no cover is available).
-- Added more in-reader control remapping options for side buttons, short power button clicks, and long-press menu actions, and more.
-- Added ability to mark a book as finished from the in-book menu. A pop-up will also display once 99% of the book is reached. This status allows tracking of total books read.
-- Added ability to move finished books to "Read" folder.
-- In-book menu to quickly adjust reader options without having to exit the book.
-- Reading stats: total books read, total reading time, number of sessions, pages turned, average session time, pages turned per minute. You can also set your reading stats as your sleep screen.
-- All-time reading stats [syncing](./docs/reading-stats-sync.md) between two CrossInk devices.
-- Reading [progress sync](./docs/nearby-position-sync.md) between two CrossInk devices.
-- Added customizable Auto Page Turn Interval (anything between 5-120 seconds).
-- Added ability to view Recent Books as a 3x3 grid view.
-- To view a more detailed list for each version, visit the [releases](https://github.com/uxjulia/CrossInk/releases) page to read release notes.
-
----
 
 ### Reader Fonts
 
