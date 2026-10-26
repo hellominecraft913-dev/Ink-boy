@@ -109,6 +109,7 @@ class HomeActivity final : public Activity {
   void onOpdsBrowserOpen();
   void onReadingStatsOpen();
   void onSavedItemsOpen();
+  void onWebBrowserOpen();
 
   int getMenuItemCount() const;
   bool storeCoverBuffer();    // Store frame buffer for cover image

@@ -230,13 +230,13 @@ void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
 #if CROSSINK_GAMEBOY
   static constexpr const freeink::Icon* ICONS[] = {&icon_folder_32, &icon_lyra_library_32, &icon_landmark_32,
                                                    &icon_lyra_library_32, &icon_lyra_transfer_32,
-                                                   &icon_lyra_settings_32};
-  constexpr int TAB_SLOTS = 6;
+                                                   &icon_lyra_settings_32, &icon_search_32};
+  constexpr int TAB_SLOTS = 7;
   constexpr int OPDS_INDEX = 3;
 #else
   static constexpr const freeink::Icon* ICONS[] = {&icon_folder_32, &icon_landmark_32, &icon_lyra_library_32,
-                                                   &icon_lyra_transfer_32, &icon_lyra_settings_32};
-  constexpr int TAB_SLOTS = 5;
+                                                   &icon_lyra_transfer_32, &icon_lyra_settings_32, &icon_search_32};
+  constexpr int TAB_SLOTS = 6;
   constexpr int OPDS_INDEX = 2;
 #endif
   int count = 0;
