@@ -39,6 +39,10 @@ Then build the firmware using the correct environment. typically the command is:
 pio run -e x4-pro
 ```
 
+** Web Browsing
+You can browse the web on the web search menu by inputting a link or a search term to the text box.
+It mostly only works with simple text only websites right now, with more updates in the future.
+
 
 
 ### Reader Fonts
