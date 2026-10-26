@@ -22,6 +22,11 @@ This is exclusivly for the Xteink X4 Pro - DO NOT attempt to flash to other devi
 
 Simply drop your Game Boy or Game Boy Color ROM into your SD Card after flashing, then click on it in Game Library, simple!
 
+## Web Browsing
+You can browse the web on the web search menu by inputting a link or a search term to the text box.
+It mostly only works with simple text only websites right now, with more updates in the future.
+
+
 ### Development
 
 to develop you need PlatformIO
@@ -38,11 +43,6 @@ Then build the firmware using the correct environment. typically the command is:
 ```sh
 pio run -e x4-pro
 ```
-
-## Web Browsing
-You can browse the web on the web search menu by inputting a link or a search term to the text box.
-It mostly only works with simple text only websites right now, with more updates in the future.
-
 
 
 ### Reader Fonts
