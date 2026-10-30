@@ -35,7 +35,6 @@
 #include "RecentBookProgress.h"
 #include "RecentBooksStore.h"
 #include "SavedItemsHomeActivity.h"
-#include "../browser/WebBrowserActivity.h"
 #include "components/UITheme.h"
 #include "components/themes/dashboard/DashboardTheme.h"
 #include "components/themes/lyra/LyraCarouselTheme.h"
@@ -63,7 +62,6 @@ enum class HomeMenuAction {
   ReadingStats,
   Bookmarks,
   FileTransfer,
-  WebBrowser,
   Settings,
 };
 
@@ -74,7 +72,7 @@ struct HomeMenuEntry {
 };
 
 struct HomeMenuEntries {
-  static constexpr int kCapacity = 9;
+  static constexpr int kCapacity = 8;
   std::array<HomeMenuEntry, kCapacity> entries{};
   int count = 0;
 
@@ -255,7 +253,6 @@ void appendHomeMenuItems(HomeMenuEntries& items, bool hasOpdsServers, bool hasRe
   }
 
   items.push({tr(STR_FILE_TRANSFER), Transfer, HomeMenuAction::FileTransfer});
-  items.push({tr(STR_WEB_BROWSER), Opds, HomeMenuAction::WebBrowser});
   items.push({tr(STR_SETTINGS_TITLE), Settings, HomeMenuAction::Settings});
 }
 
@@ -287,7 +284,6 @@ HomeMenuEntries buildMinimalMenuItems(bool hasOpdsServers, bool hasReadingStats,
   }
 
   items.push({tr(STR_FILE_TRANSFER), Transfer, HomeMenuAction::FileTransfer});
-  items.push({tr(STR_WEB_BROWSER), Opds, HomeMenuAction::WebBrowser});
   return items;
 }
 
@@ -543,12 +539,12 @@ static_assert(HomeActivity::kMaxCachedBooks >= LyraCarouselMetrics::values.homeR
 
 int HomeActivity::getMenuItemCount() const {
 #if CROSSINK_GAMEBOY
-  if (coverGridUi) return static_cast<int>(recentBooks.size()) + (hasOpdsServers ? 7 : 6);
-#else
   if (coverGridUi) return static_cast<int>(recentBooks.size()) + (hasOpdsServers ? 6 : 5);
+#else
+  if (coverGridUi) return static_cast<int>(recentBooks.size()) + (hasOpdsServers ? 5 : 4);
 #endif
   const auto& metrics = UITheme::getInstance().getMetrics();
-  int count = 5;  // File Browser, Library, File transfer, Web Browser, Settings
+  int count = 4;  // File Browser, Library, File transfer, Web Browser, Settings
 #if CROSSINK_GAMEBOY
   count++;  // Game Library
 #endif
@@ -1522,9 +1518,6 @@ void HomeActivity::loop() {
           case HomeMenuAction::FileTransfer:
             onFileTransferOpen();
             break;
-          case HomeMenuAction::WebBrowser:
-            onWebBrowserOpen();
-            break;
           case HomeMenuAction::ContinueReading:
           case HomeMenuAction::Settings:
             break;
@@ -1774,9 +1767,6 @@ void HomeActivity::loop() {
         break;
       case HomeMenuAction::FileTransfer:
         onFileTransferOpen();
-        break;
-      case HomeMenuAction::WebBrowser:
-        onWebBrowserOpen();
         break;
       case HomeMenuAction::Settings:
         onSettingsOpen();
@@ -2059,10 +2049,6 @@ void HomeActivity::activateCoverGridSelection() {
       break;
     case 5:
       if (hasOpdsServers) onSettingsOpen();
-      else onWebBrowserOpen();
-      break;
-    case 6:
-      if (hasOpdsServers) onWebBrowserOpen();
       break;
 #else
     case 1:
@@ -2078,10 +2064,6 @@ void HomeActivity::activateCoverGridSelection() {
       break;
     case 4:
       if (hasOpdsServers) onSettingsOpen();
-      else onWebBrowserOpen();
-      break;
-    case 5:
-      if (hasOpdsServers) onWebBrowserOpen();
       break;
 #endif
   }
@@ -2417,11 +2399,6 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
 
-void HomeActivity::onWebBrowserOpen() {
-  auto browser = makeUniqueNoThrow<WebBrowserActivity>(renderer, mappedInput);
-  if (!browser) return;
-  startActivityForResult(std::move(browser), [this](const ActivityResult&) { requestUpdate(); });
-}
 
 void HomeActivity::onReadingStatsOpen() {
   if (!SETTINGS.shouldTrackReadingStats()) return;
