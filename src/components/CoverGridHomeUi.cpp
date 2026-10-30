@@ -226,6 +226,8 @@ void CoverGridHomeUi::drawGrid(UiScreen& screen) {
   fui::coverGrid(screen.frame(), rect, grid);
 }
 
+void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
+
 #if CROSSINK_GAMEBOY
   static constexpr const freeink::Icon* ICONS[] = {
       &icon_folder_32,
