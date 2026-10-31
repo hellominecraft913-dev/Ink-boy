@@ -108,6 +108,9 @@ class MappedInputManager {
   // so it cannot bypass the Disable Touchscreen setting.
   bool supportsMultiTouch() const;
   bool getTwoFingerTouch(int& x1, int& y1, int& x2, int& y2) const;
+  // The legacy single-touch API stays suppressed until a multi-touch sequence
+  // ends. Keep reporting the surviving GT911 contact for held-control users.
+  bool getOneFingerTouch(int& x, int& y) const;
   bool wasCompletedMultiTouchSwipe(CompletedSwipe& swipe) const;
   bool wasCompletedMultiTouchRotation(CompletedRotation& rotation) const;
   // Report a side-band drag while held and once on release/cancellation.

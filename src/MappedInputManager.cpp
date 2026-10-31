@@ -269,6 +269,16 @@ bool MappedInputManager::getTwoFingerTouch(int& x1, int& y1, int& x2, int& y2) c
   return true;
 }
 
+bool MappedInputManager::getOneFingerTouch(int& x, int& y) const {
+  if (!supportsMultiTouch()) return false;
+
+  const auto touch = gpio.getTouchSnapshot();
+  if (touch.count != 1 || touch.reportedCount != 1) return false;
+
+  renderer.tapToLogical(touch.contacts[0].nx, touch.contacts[0].ny, x, y);
+  return true;
+}
+
 bool MappedInputManager::wasCompletedMultiTouchSwipe(CompletedSwipe& swipe) const {
   if (!touchInputEnabled()) return false;
 

@@ -1177,15 +1177,35 @@ void GameBoyActivity::handleInput() {
       }
     }
 
-    if (!handledMultiTouch) {
-      if (multiTouchActive) {
-        // Return to the one-finger behavior cleanly; updateTouch below will
-        // rebuild the mask for the finger that is still held, if any.
+    // GT911 suppresses the legacy single-touch events until every finger in a
+    // multi-touch sequence is up. Continue polling the snapshot after the
+    // count drops from two to one, otherwise releasing either finger clears
+    // the button that the other finger is still holding.
+    if (!handledMultiTouch && multiTouchActive) {
+      int x = 0;
+      int y = 0;
+      if (mappedInput.getOneFingerTouch(x, y)) {
+        const TouchControl remaining = hitTestTouch(x, y);
+        const uint8_t nextTouch = joypadBitForTouch(remaining);
+        if (remaining != activeTouch || nextTouch != touchJoypadMask) {
+          activeTouch = remaining;
+          touchJoypadMask = nextTouch;
+          applyJoypad();
+        }
+        if (remaining == TouchControl::Exit) exitRequested = true;
+        else if (remaining == TouchControl::Rotate) rotateRequested = true;
+      } else {
+        // No contacts remain (or the snapshot is no longer a supported
+        // single-contact state); release the last virtual button.
         multiTouchActive = false;
         activeTouch = TouchControl::None;
         touchJoypadMask = 0;
         applyJoypad();
       }
+      handledMultiTouch = true;
+    }
+
+    if (!handledMultiTouch) {
       int x = 0;
       int y = 0;
       if (mappedInput.wasScreenTouchDown(x, y)) updateTouch(x, y);
