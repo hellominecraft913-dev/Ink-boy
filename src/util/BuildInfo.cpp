@@ -15,8 +15,8 @@
 
 namespace AppVersion {
 const char* version() { return CROSSINK_VERSION; }
-const char* versionLabel() { return "CrossInk " CROSSINK_VERSION; }
-const char* userAgent() { return "CrossInk-ESP32-" CROSSINK_VERSION; }
+const char* versionLabel() { return "Ink-boy " CROSSINK_VERSION; }
+const char* userAgent() { return "Ink-boy-ESP32-" CROSSINK_VERSION; }
 const char* gitSha() { return CROSSINK_GIT_SHA; }
 const char* gitDirtyFlag() { return CROSSINK_GIT_DIRTY; }
 }  // namespace AppVersion
