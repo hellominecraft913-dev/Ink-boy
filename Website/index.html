@@ -1,0 +1,1214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Ink-boy — Game Boy and Game Boy Color firmware for the Xteink X4 Pro. Free, open-source custom firmware.">
+<meta name="theme-color" content="#0a0a0a">
+<title>Ink-boy — Game Boy firmware for Xteink X4 Pro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg-primary: #0a0a0a;
+  --bg-card: #161616;
+  --bg-card-hover: #1c1c1c;
+  --green-accent: #4a8a4a;
+  --green-light: #5fa05f;
+  --green-dark: #2d5a2d;
+  --text-primary: #e8e8e8;
+  --text-secondary: #9a9a9a;
+  --text-muted: #666666;
+  --border-subtle: #222222;
+  --border-green: #2d5a2d;
+  --font-display: 'JetBrains Mono', monospace;
+  --font-body: 'Inter', -apple-system, sans-serif;
+  --max-width: 1080px;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+a {
+  color: var(--green-light);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--text-primary);
+}
+
+/* ===== NAV ===== */
+.nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 0 24px;
+  transition: background-color 0.3s ease, backdrop-filter 0.3s ease;
+}
+
+.nav.scrolled {
+  background-color: rgba(10, 10, 10, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.nav-inner {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+}
+
+.nav-logo {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-logo-dot {
+  width: 8px;
+  height: 8px;
+  background-color: var(--green-accent);
+  border-radius: 50%;
+  display: inline-block;
+  animation: dotPulse 2s ease-in-out infinite;
+}
+
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  list-style: none;
+}
+
+.nav-links a {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: color 0.2s ease;
+}
+
+.nav-links a:hover {
+  color: var(--text-primary);
+}
+
+.nav-links .btn-nav {
+  padding: 8px 16px;
+  border: 1px solid var(--border-green);
+  border-radius: 6px;
+  color: var(--green-light);
+  font-weight: 600;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.nav-links .btn-nav:hover {
+  background-color: var(--green-dark);
+  border-color: var(--green-accent);
+  color: var(--text-primary);
+}
+
+.nav-mobile-toggle {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 4px;
+}
+
+/* ===== HERO ===== */
+.hero {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 120px 24px 80px;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(74, 138, 74, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(74, 138, 74, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, black 20%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, black 20%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero-glow {
+  position: absolute;
+  top: -200px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(74, 138, 74, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.hero-content {
+  max-width: var(--max-width);
+  width: 100%;
+  text-align: center;
+  position: relative;
+  z-index: 1;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border: 1px solid var(--border-green);
+  border-radius: 100px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--green-light);
+  margin-bottom: 32px;
+  background-color: rgba(45, 90, 45, 0.1);
+}
+
+.hero-badge-dot {
+  width: 6px;
+  height: 6px;
+  background-color: var(--green-accent);
+  border-radius: 50%;
+}
+
+.hero-title {
+  font-family: var(--font-display);
+  font-size: clamp(2.5rem, 7vw, 4.5rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  margin-bottom: 24px;
+}
+
+.hero-title .green {
+  color: var(--green-accent);
+}
+
+.hero-subtitle {
+  font-size: clamp(1rem, 2.2vw, 1.25rem);
+  color: var(--text-secondary);
+  max-width: 560px;
+  margin: 0 auto 48px;
+  line-height: 1.7;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: center;
+  margin-bottom: 64px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 28px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  font-family: var(--font-body);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+  text-decoration: none;
+}
+
+.btn-primary {
+  background-color: var(--green-accent);
+  color: var(--text-primary);
+}
+
+.btn-primary:hover {
+  background-color: var(--green-light);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(74, 138, 74, 0.25);
+}
+
+.btn-secondary {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+}
+
+.btn-secondary:hover {
+  background-color: var(--bg-card-hover);
+  border-color: var(--border-green);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+}
+
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 32px;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.hero-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hero-meta-icon {
+  color: var(--green-accent);
+  font-size: 1rem;
+}
+
+/* Device image in hero */
+.hero-device {
+  margin-top: 48px;
+  display: flex;
+  justify-content: center;
+}
+
+.hero-device img {
+  max-width: 280px;
+  width: 100%;
+  height: auto;
+  animation: floatDevice 6s ease-in-out infinite;
+}
+
+@keyframes floatDevice {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+
+/* ===== SECTIONS ===== */
+.section {
+  padding: 120px 24px;
+  position: relative;
+}
+
+.section-inner {
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+.section-label {
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--green-accent);
+  margin-bottom: 16px;
+}
+
+.section-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin-bottom: 16px;
+}
+
+.section-desc {
+  font-size: 1.0625rem;
+  color: var(--text-secondary);
+  max-width: 540px;
+  line-height: 1.7;
+  margin-bottom: 56px;
+}
+
+.section-divider {
+  border: none;
+  height: 1px;
+  background: var(--border-subtle);
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+/* ===== FEATURES GRID ===== */
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+
+.feature-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 32px 28px;
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.feature-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--green-dark), var(--green-accent), var(--green-dark));
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.feature-card:hover {
+  background-color: var(--bg-card-hover);
+  border-color: var(--border-green);
+  transform: translateY(-2px);
+}
+
+.feature-card:hover::before {
+  opacity: 1;
+}
+
+.feature-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(74, 138, 74, 0.1);
+  border: 1px solid var(--border-green);
+  border-radius: 8px;
+  font-size: 1.125rem;
+  color: var(--green-light);
+  margin-bottom: 20px;
+}
+
+.feature-title {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+  letter-spacing: -0.01em;
+}
+
+.feature-desc {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+/* ===== INSTALL STEPS ===== */
+.steps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 24px;
+}
+
+.step-card {
+  padding: 32px 28px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background-color: var(--bg-card);
+  position: relative;
+  transition: all 0.25s ease;
+}
+
+.step-card:hover {
+  border-color: var(--border-green);
+  transform: translateY(-2px);
+}
+
+.step-number {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--green-accent);
+  opacity: 0.5;
+  margin-bottom: 16px;
+  line-height: 1;
+}
+
+.step-title {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.step-desc {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+/* ===== SPECS ===== */
+.specs-table {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.spec-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.spec-label {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.spec-value {
+  font-family: var(--font-display);
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: right;
+}
+
+/* ===== WARNING ===== */
+.warning-box {
+  margin-top: 64px;
+  padding: 24px 28px;
+  border: 1px solid rgba(200, 150, 40, 0.2);
+  border-radius: 12px;
+  background-color: rgba(200, 150, 40, 0.04);
+}
+
+.warning-box-title {
+  font-family: var(--font-display);
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #c89628;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.warning-box p {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+
+/* ===== GALLERY ===== */
+.gallery-section {
+  padding: 80px 24px;
+  text-align: center;
+}
+
+.gallery-device {
+  display: inline-block;
+  max-width: 320px;
+  width: 100%;
+}
+
+.gallery-device img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* ===== DOWNLOAD CTA ===== */
+.download-section {
+  text-align: center;
+}
+
+.download-section .section-desc {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.download-section .hero-actions {
+  margin-bottom: 0;
+}
+
+/* ===== FOOTER ===== */
+.footer {
+  padding: 64px 24px 40px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.footer-inner {
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+.footer-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 48px;
+  margin-bottom: 48px;
+}
+
+.footer-brand {
+  flex-shrink: 0;
+}
+
+.footer-brand-name {
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.footer-brand-desc {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  max-width: 280px;
+  line-height: 1.6;
+}
+
+.footer-links-group h4 {
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+
+.footer-links-group ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.footer-links-group a {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.footer-links-group a:hover {
+  color: var(--text-primary);
+}
+
+.footer-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.footer-bottom a {
+  color: var(--text-muted);
+}
+
+.footer-bottom a:hover {
+  color: var(--text-primary);
+}
+
+/* ===== ANIMATIONS ===== */
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.reveal-delay-1 { transition-delay: 0.05s; }
+.reveal-delay-2 { transition-delay: 0.1s; }
+.reveal-delay-3 { transition-delay: 0.15s; }
+.reveal-delay-4 { transition-delay: 0.2s; }
+.reveal-delay-5 { transition-delay: 0.25s; }
+.reveal-delay-6 { transition-delay: 0.3s; }
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 900px) {
+  .features-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .nav-links {
+    display: none;
+  }
+
+  .nav-mobile-toggle {
+    display: block;
+  }
+
+  .nav-links.open {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    top: 64px;
+    left: 0;
+    right: 0;
+    background-color: rgba(10, 10, 10, 0.95);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border-subtle);
+    gap: 16px;
+  }
+
+  .nav-links.open a {
+    font-size: 1rem;
+    padding: 8px 0;
+  }
+
+  .hero {
+    min-height: auto;
+    padding: 140px 20px 60px;
+  }
+
+  .hero-actions {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .btn {
+    width: 100%;
+    max-width: 280px;
+    justify-content: center;
+  }
+
+  .features-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .steps-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .specs-table {
+    grid-template-columns: 1fr;
+  }
+
+  .section {
+    padding: 80px 20px;
+  }
+
+  .gallery-section {
+    padding: 60px 20px;
+  }
+
+  .gallery-device {
+    max-width: 260px;
+  }
+
+  .footer-top {
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  .footer-bottom {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .hero-meta {
+    gap: 16px;
+  }
+
+  .hero-device img {
+    max-width: 220px;
+  }
+}
+
+/* ===== REDUCED MOTION ===== */
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
+
+  .feature-card,
+  .step-card,
+  .btn,
+  .hero-device img {
+    transition: none;
+  }
+
+  @keyframes floatDevice {
+    0%, 100% { transform: none; }
+  }
+}
+
+/* ===== ACCESSIBILITY ===== */
+:focus-visible {
+  outline: 2px solid var(--green-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="nav" id="nav" role="navigation" aria-label="Main navigation">
+  <div class="nav-inner">
+    <a href="#" class="nav-logo" aria-label="Ink-boy home">
+      <span class="nav-logo-dot" aria-hidden="true"></span>
+      ink-boy
+    </a>
+    <button class="nav-mobile-toggle" aria-label="Toggle menu" aria-expanded="false" onclick="toggleMenu()">
+      <span aria-hidden="true">&#9776;</span>
+    </button>
+    <ul class="nav-links" id="navLinks">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#install">Install</a></li>
+      <li><a href="#gallery">Gallery</a></li>
+      <li><a href="#specs">Specs</a></li>
+      <li><a href="https://github.com/hellominecraft913-dev/ink-boy" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+      <li><a href="https://github.com/hellominecraft913-dev/ink-boy/releases" target="_blank" rel="noopener noreferrer" class="btn-nav">Download</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero" id="hero">
+  <div class="hero-grid" aria-hidden="true"></div>
+  <div class="hero-glow" aria-hidden="true"></div>
+  <div class="hero-content">
+    <div class="hero-badge reveal">
+      <span class="hero-badge-dot" aria-hidden="true"></span>
+      Open-source custom firmware
+    </div>
+    <h1 class="hero-title reveal reveal-delay-1">
+      Your Xteink X4 Pro.<br>
+      <span class="green">Reimagined.</span>
+    </h1>
+    <p class="hero-subtitle reveal reveal-delay-2">
+      Ink-boy brings Game Boy and Game Boy Color emulation to the Xteink X4 Pro e-reader.
+      Free, open-source, and built for the device you already own.
+    </p>
+    <div class="hero-actions reveal reveal-delay-3">
+      <a href="https://github.com/hellominecraft913-dev/ink-boy/releases" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+        <span aria-hidden="true">&#8617;</span> Download Firmware
+      </a>
+      <a href="https://github.com/hellominecraft913-dev/ink-boy" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
+        View on GitHub <span aria-hidden="true">&#8599;</span>
+      </a>
+    </div>
+    <div class="hero-meta reveal reveal-delay-4">
+      <span class="hero-meta-item">
+        <span class="hero-meta-icon" aria-hidden="true">&#9733;</span>
+        <span>20+</span> stars on GitHub
+      </span>
+      <span class="hero-meta-item">
+        <span class="hero-meta-icon" aria-hidden="true">&#9776;</span>
+        MIT Licensed
+      </span>
+      <span class="hero-meta-item">
+        <span class="hero-meta-icon" aria-hidden="true">&#9889;</span>
+        Xteink X4 Pro only
+      </span>
+    </div>
+    <div class="hero-device reveal reveal-delay-5">
+      <img src="assets/pokemon-red.png" alt="Pokemon Red running on the Xteink X4 Pro via Ink-boy firmware" loading="eager">
+    </div>
+  </div>
+</header>
+
+<!-- FEATURES -->
+<section class="section" id="features" aria-labelledby="features-title">
+  <div class="section-inner">
+    <p class="section-label reveal">Features</p>
+    <h2 class="section-title reveal reveal-delay-1" id="features-title">
+      What Ink-boy brings
+    </h2>
+    <p class="section-desc reveal reveal-delay-2">
+      Your X4 Pro, expanded — with games, speed, and control.
+    </p>
+    <div class="features-grid">
+      <div class="feature-card reveal reveal-delay-1">
+        <div class="feature-icon" aria-hidden="true">&#9878;</div>
+        <h3 class="feature-title">Game Boy Emulation</h3>
+        <p class="feature-desc">
+          Built-in Game Boy and Game Boy Color emulation powered by Peanut-GB and Walnut-CGB. Drop your ROM files on the SD card and start playing straight away.
+        </p>
+      </div>
+      <div class="feature-card reveal reveal-delay-2">
+        <div class="feature-icon" aria-hidden="true">&#9889;</div>
+        <h3 class="feature-title">Faster Refresh</h3>
+        <p class="feature-desc">
+          A custom waveform LUT drives the e-ink panel roughly 2.5&#215; faster so games are actually playable and the reader feels snappy.
+        </p>
+      </div>
+      <div class="feature-card reveal reveal-delay-3">
+        <div class="feature-icon" aria-hidden="true">&#9776;</div>
+        <h3 class="feature-title">Custom Buttons</h3>
+        <p class="feature-desc">
+          Configurable button shortcuts for the reader and games. Map any action to any hardware button for your own workflow.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="section-divider">
+
+<!-- INSTALL -->
+<section class="section" id="install" aria-labelledby="install-title">
+  <div class="section-inner">
+    <p class="section-label reveal">Installation</p>
+    <h2 class="section-title reveal reveal-delay-1" id="install-title">
+      Get running in minutes
+    </h2>
+    <p class="section-desc reveal reveal-delay-2">
+      Install via web flasher or SD card. Then load your ROMs and start playing.
+    </p>
+    <div class="steps-grid">
+      <div class="step-card reveal reveal-delay-1">
+        <span class="step-number">01</span>
+        <h3 class="step-title">Download the firmware</h3>
+        <p class="step-desc">
+          Grab the latest <code>firmware.bin</code> from the GitHub Releases page.
+        </p>
+      </div>
+      <div class="step-card reveal reveal-delay-2">
+        <span class="step-number">02</span>
+        <h3 class="step-title">Flash the device</h3>
+        <p class="step-desc">
+          Flash via the web flasher or copy to your SD card. The installer handles the rest.
+        </p>
+      </div>
+      <div class="step-card reveal reveal-delay-3">
+        <span class="step-number">03</span>
+        <h3 class="step-title">Drop your ROMs</h3>
+        <p class="step-desc">
+          Copy Game Boy or Game Boy Color ROM files onto the SD card.
+        </p>
+      </div>
+      <div class="step-card reveal reveal-delay-4">
+        <span class="step-number">04</span>
+        <h3 class="step-title">Play</h3>
+        <p class="step-desc">
+          Open the Game Library on your X4 Pro, select your ROM, and start playing.
+        </p>
+      </div>
+    </div>
+
+    <div class="warning-box reveal">
+      <div class="warning-box-title">
+        <span aria-hidden="true">&#9888;</span>
+        Important note about display lifespan
+      </div>
+      <p>
+        Ink-boy uses a custom waveform LUT that drives the e-ink panel outside of its normal operating parameters. This increases the refresh rate by roughly 2.5&#215; but may shorten the display lifespan. You can disable the fast refresh rate in settings for a safer experience.
+      </p>
+    </div>
+  </div>
+</section>
+
+<hr class="section-divider">
+
+<!-- GALLERY -->
+<section class="section gallery-section" id="gallery" aria-labelledby="gallery-title">
+  <div class="section-inner">
+    <p class="section-label reveal">Gallery</p>
+    <h2 class="section-title reveal reveal-delay-1" id="gallery-title">
+      Ink-boy on the X4 Pro
+    </h2>
+    <p class="section-desc reveal reveal-delay-2" style="margin-left:auto;margin-right:auto;">
+      Running Pokemon Red — smooth enough to play, crisp enough to read.
+    </p>
+    <div class="gallery-device reveal reveal-delay-3">
+      <img src="assets/pokemon-red.png" alt="Pokemon Red running on the Xteink X4 Pro via Ink-boy firmware" loading="lazy">
+    </div>
+  </div>
+</section>
+
+<hr class="section-divider">
+
+<!-- SPECS -->
+<section class="section" id="specs" aria-labelledby="specs-title">
+  <div class="section-inner">
+    <p class="section-label reveal">Specifications</p>
+    <h2 class="section-title reveal reveal-delay-1" id="specs-title">
+      Under the hood
+    </h2>
+    <p class="section-desc reveal reveal-delay-2">
+      The technical details that make Ink-boy run smooth on your X4 Pro.
+    </p>
+    <div class="specs-table reveal reveal-delay-3">
+      <div class="spec-item">
+        <span class="spec-label">Ink-boy firmware</span>
+        <span class="spec-value">Open source</span>
+      </div>
+      <div class="spec-item">
+        <span class="spec-label">Device</span>
+        <span class="spec-value">Xteink X4 Pro</span>
+      </div>
+      <div class="spec-item">
+        <span class="spec-label">Chip</span>
+        <span class="spec-value">ESP32-S3</span>
+      </div>
+      <div class="spec-item">
+        <span class="spec-label">GB Emulator</span>
+        <span class="spec-value">Peanut-GB</span>
+      </div>
+      <div class="spec-item">
+        <span class="spec-label">GBC Emulator</span>
+        <span class="spec-value">Walnut-CGB</span>
+      </div>
+      <div class="spec-item">
+        <span class="spec-label">License</span>
+        <span class="spec-value">MIT</span>
+      </div>
+      <div class="spec-item">
+        <span class="spec-label">Build System</span>
+        <span class="spec-value">PlatformIO</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="section-divider">
+
+<!-- DOWNLOAD CTA -->
+<section class="section download-section" aria-labelledby="download-title">
+  <div class="section-inner">
+    <p class="section-label reveal">Get Started</p>
+    <h2 class="section-title reveal reveal-delay-1" id="download-title">
+      Ready to get started?
+    </h2>
+    <p class="section-desc reveal reveal-delay-2">
+      Download the latest firmware, flash it to your device, and start reading or playing games.
+    </p>
+    <div class="hero-actions reveal reveal-delay-3">
+      <a href="https://github.com/hellominecraft913-dev/ink-boy/releases" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+        <span aria-hidden="true">&#8617;</span> Download from Releases
+      </a>
+      <a href="https://github.com/hellominecraft913-dev/ink-boy" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
+        <span aria-hidden="true">&#128187;</span> Source Code on GitHub
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="footer" role="contentinfo">
+  <div class="footer-inner">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <div class="footer-brand-name">ink-boy</div>
+        <p class="footer-brand-desc">
+          Game Boy and Game Boy Color firmware for the Xteink X4 Pro. Open source, MIT licensed.
+        </p>
+      </div>
+      <div class="footer-links-group">
+        <h4>Navigate</h4>
+        <ul>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#install">Installation</a></li>
+          <li><a href="#gallery">Gallery</a></li>
+          <li><a href="#specs">Specifications</a></li>
+        </ul>
+      </div>
+      <div class="footer-links-group">
+        <h4>Resources</h4>
+        <ul>
+          <li><a href="https://github.com/hellominecraft913-dev/ink-boy" target="_blank" rel="noopener noreferrer">GitHub Repository</a></li>
+          <li><a href="https://github.com/hellominecraft913-dev/ink-boy/releases" target="_blank" rel="noopener noreferrer">Releases</a></li>
+          <li><a href="https://github.com/hellominecraft913-dev" target="_blank" rel="noopener noreferrer">Developer Profile</a></li>
+        </ul>
+      </div>
+      <div class="footer-links-group">
+        <h4>Develop</h4>
+        <ul>
+          <li><a href="https://github.com/hellominecraft913-dev/ink-boy#development" target="_blank" rel="noopener noreferrer">Build with PlatformIO</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; 2026 Ink-boy. MIT Licensed.</span>
+      <span>Not affiliated with Xteink.</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function() {
+  'use strict';
+
+  // ===== NAV SCROLL EFFECT =====
+  const nav = document.getElementById('nav');
+  let ticking = false;
+
+  function updateNav() {
+    const scrolled = window.scrollY > 40;
+    nav.classList.toggle('scrolled', scrolled);
+    ticking = false;
+  }
+
+  window.addEventListener('scroll', function() {
+    if (!ticking) {
+      requestAnimationFrame(updateNav);
+      ticking = true;
+    }
+  }, { passive: true });
+
+  // ===== REVEAL ON SCROLL =====
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  if (!prefersReducedMotion && 'IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, {
+      threshold: 0.1,
+      rootMargin: '0px 0px -40px 0px'
+    });
+
+    document.querySelectorAll('.reveal').forEach(function(el) {
+      observer.observe(el);
+    });
+  } else {
+    document.querySelectorAll('.reveal').forEach(function(el) {
+      el.classList.add('visible');
+    });
+  }
+
+  // ===== MOBILE MENU TOGGLE =====
+  window.toggleMenu = function() {
+    const links = document.getElementById('navLinks');
+    const btn = document.querySelector('.nav-mobile-toggle');
+    const isOpen = links.classList.toggle('open');
+    btn.setAttribute('aria-expanded', isOpen.toString());
+  };
+
+  document.getElementById('navLinks').addEventListener('click', function(e) {
+    if (e.target.tagName === 'A' && window.innerWidth <= 640) {
+      document.getElementById('navLinks').classList.remove('open');
+      document.querySelector('.nav-mobile-toggle').setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  // ===== SMOOTH SCROLL FOR ANCHOR LINKS =====
+  document.querySelectorAll('a[href^="#"]').forEach(function(anchor) {
+    anchor.addEventListener('click', function(e) {
+      const target = document.querySelector(this.getAttribute('href'));
+      if (target) {
+        e.preventDefault();
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+
+  // ===== SCROLL-DRIVEN PARALLAX FOR DEVICE IMAGE =====
+  const deviceImages = document.querySelectorAll('.hero-device img, .gallery-device img');
+
+  if (!prefersReducedMotion && 'IntersectionObserver' in window) {
+    const parallaxObserver = new IntersectionObserver(function(entries) {
+      entries.forEach(function(entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('parallax-active');
+          parallaxObserver.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1 });
+
+    deviceImages.forEach(function(img) {
+      parallaxObserver.observe(img);
+    });
+
+    let scrollTicking = false;
+    window.addEventListener('scroll', function() {
+      if (!scrollTicking) {
+        requestAnimationFrame(function() {
+          deviceImages.forEach(function(img) {
+            const rect = img.getBoundingClientRect();
+            const windowHeight = window.innerHeight;
+            // Image is in view
+            if (rect.top < windowHeight && rect.bottom > 0) {
+              const scrolled = window.scrollY;
+              const imgTop = img.parentElement.getBoundingClientRect().top + window.scrollY;
+              const offset = (scrolled - imgTop + windowHeight * 0.4) * 0.03;
+              img.style.transform = 'translateY(' + (-offset) + 'px)';
+            }
+          });
+          scrollTicking = false;
+        });
+        scrollTicking = true;
+      }
+    }, { passive: true });
+  }
+
+  // Initial call
+  updateNav();
+})();
+</script>
+
+</body>
+</html>

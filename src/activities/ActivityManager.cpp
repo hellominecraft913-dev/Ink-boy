@@ -39,6 +39,10 @@
 #include "browser/OpdsBookBrowserActivity.h"
 #include "components/TouchRegistry.h"
 #include "components/UITheme.h"
+#if CROSSINK_GAMEBOY
+#include "gameboy/GameBoyActivity.h"
+#include "GameLibraryActivity.h"
+#endif
 #include "home/AlertActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
@@ -1082,6 +1086,17 @@ void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
 }
 
+#if CROSSINK_GAMEBOY
+void ActivityManager::goToGameLibrary() {
+  auto activity = makeUniqueNoThrow<GameLibraryActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM opening Game Library activity");
+    return;
+  }
+  pushActivity(std::move(activity));
+}
+#endif
+
 void ActivityManager::goToLibrary() {
   auto library = makeUniqueNoThrow<LibraryActivity>(renderer, mappedInput);
   if (!library) {
@@ -1158,6 +1173,18 @@ void ActivityManager::goToReader(std::string path, const bool suppressBackReleas
   replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path), suppressBackRelease,
                                                    allowFastInitialRefresh, cleanImageBaseOnEntry, keepWakeFrame));
 }
+
+#if CROSSINK_GAMEBOY
+void ActivityManager::goToGameBoy(std::string path) {
+  auto activity = makeUniqueNoThrow<GameBoyActivity>(renderer, mappedInput, std::move(path));
+  if (!activity) {
+    LOG_ERR("ACT", "OOM opening Game Boy activity");
+    return;
+  }
+  // Push so GameBoyActivity::finish() returns to the Game Library.
+  pushActivity(std::move(activity));
+}
+#endif
 
 void ActivityManager::goToReaderAndRunMenuAction(std::string path, const uint8_t action) {
   pendingReaderMenuAction = action;

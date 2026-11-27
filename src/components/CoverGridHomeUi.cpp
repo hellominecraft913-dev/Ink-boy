@@ -244,11 +244,24 @@ void CoverGridHomeUi::drawGrid(UiScreen& screen) {
 }
 
 void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
-  static constexpr const freeink::Icon* ICONS[] = {&icon_folder_32, &icon_landmark_32, &icon_puzzle_32,
-                                                   &icon_lyra_transfer_32, &icon_lyra_settings_32};
+  static constexpr const freeink::Icon* ICONS[] = {
+      &icon_folder_32,
+#if CROSSINK_GAMEBOY
+      &icon_book_32,
+#endif
+      &icon_landmark_32,
+      &icon_puzzle_32,
+      &icon_lyra_transfer_32,
+      &icon_lyra_settings_32,
+  };
+  constexpr int iconCount = static_cast<int>(sizeof(ICONS) / sizeof(ICONS[0]));
   int count = 0;
-  for (int i = 0; i < 5; ++i) {
+  for (int i = 0; i < iconCount; ++i) {
+#if CROSSINK_GAMEBOY
+    if (i == 3 && !hasPlugins) continue;
+#else
     if (i == 2 && !hasPlugins) continue;
+#endif
     auto& tab = tabItems[count];
     tab.value = books->size() + count;
     tab.selected = selected == tab.value;
@@ -265,7 +278,11 @@ void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
   tabs.iconPainter = [](fui::DrawTarget&, fui::Rect iconRect, const fui::TabItem& tab, uint8_t, void* user) {
     const auto& self = *static_cast<CoverGridHomeUi*>(user);
     const int index = tab.value - static_cast<int>(self.books->size());
+#if CROSSINK_GAMEBOY
+    const int icon = !self.hasPlugins && index >= 3 ? index + 1 : index;
+#else
     const int icon = !self.hasPlugins && index >= 2 ? index + 1 : index;
+#endif
     drawLucideIcon(self.renderer, *ICONS[icon], iconRect.x, iconRect.y);
     return true;
   };
@@ -275,7 +292,6 @@ void CoverGridHomeUi::drawTabs(UiScreen& screen, fui::Rect rect) {
   tabs.distributedSlotWidth = 0;
   fui::tabBar(screen.frame(), rect, tabs);
 }
-
 bool CoverGridHomeUi::paintFramedCover(fui::DrawTarget& target, fui::Rect rect, size_t index) {
   constexpr int16_t SHADOW_OFFSET = 2;
   const auto ink = fui::Paint::solid(fui::Color::Black);

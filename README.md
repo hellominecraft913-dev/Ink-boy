@@ -178,3 +178,8 @@ This repository does not accept pull requests. Feature requests may be opened in
 If you'd like to show some love and support ongoing development, please consider supporting me on Ko-fi.
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Q5Q01M6S7)
+## Ink-boy Game Library port
+
+This build adds the Ink-boy Game Library and Game Boy / Game Boy Color emulation to the Xteink X4 Pro target. ROMs are managed through the on-device Game Library. The X4 Pro custom UC8279 fast-refresh APIs are integrated into the pinned CrossInk 2.0.0 FreeInk SDK while preserving its newer display and bus implementation.
+
+See `docs/gameboy-emulators.md` for emulator details and controls.

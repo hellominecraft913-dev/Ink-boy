@@ -1,0 +1,217 @@
+#include "OpdsClient.h"
+
+#include <cassert>
+#include <cstdio>
+#include <deque>
+
+using namespace freeink::opds;
+
+const std::string ROOT = "https://catalog.test";
+const std::string FEED = R"(<feed xmlns="http://www.w3.org/2005/Atom"><title>Books</title></feed>)";
+const std::string BASIC_DOC = R"({"authentication":[{"type":"http://opds-spec.org/auth/basic"}]})";
+const std::string OAUTH_DOC = R"({"authentication":[{"type":"http://opds-spec.org/auth/oauth/password","links":[{"rel":"authenticate","href":"/token"}]}]})";
+
+struct Reply {
+  int status;
+  std::string body;
+  std::string challenge;
+  bool redirected = false;
+};
+
+struct Transport : OpdsTransport {
+  std::deque<Reply> replies;
+  std::deque<Reply> posts;
+  std::vector<HttpAuth> requests;
+  std::vector<std::string> forms;
+
+  HttpResult get(const std::string&, const HttpAuth& auth, const char*, const char*, bool capture,
+                 const OpdsDataSink& sink) override {
+    assert(!replies.empty());
+    Reply reply = replies.front();
+    replies.pop_front();
+    requests.push_back(auth);
+    const bool ok = reply.status >= 200 && reply.status < 300;
+    if (ok || (capture && reply.status == 401))
+      sink(reinterpret_cast<const uint8_t*>(reply.body.data()), reply.body.size());
+    return {ok, reply.status, reply.challenge, reply.redirected};
+  }
+  bool postForm(const std::string& url, const std::string& form, std::string& response, int& status) override {
+    assert(url == ROOT + "/token");
+    assert(!posts.empty());
+    Reply reply = posts.front();
+    posts.pop_front();
+    forms.push_back(form);
+    response = reply.body;
+    status = reply.status;
+    return status == 200;
+  }
+  std::string resolveUrl(const std::string&, const std::string& ref) override { return ROOT + ref; }
+};
+
+void configure(OpdsClient& client) { client.setServer(ROOT, "reader", "secret", {{"X-Proxy", "value"}}); }
+
+int main() {
+  // A guest-view catalog answers 200 without credentials (#4566): send the
+  // configured login on the first feed request.
+  {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    http.replies.push_back({200, FEED, ""});
+    OpdsFeedParser parser;
+    assert(client.fetchFeed(ROOT + "/opds", parser) == OpdsClient::FetchStatus::Ok);
+    assert(http.requests.back().username == "reader" && http.requests.back().password == "secret");
+    assert(client.downloadAuth(ROOT + "/book.epub").username == "reader");
+    assert(!client.tokensDirty());
+    // Once latched, Basic still stays with the server's origin.
+    assert(client.downloadAuth("http://cdn.test/cover.jpg").username.empty());
+    http.replies.push_back({200, FEED, ""});
+    OpdsFeedParser other;
+    assert(client.fetchFeed("https://other.test/opds", other) == OpdsClient::FetchStatus::Ok);
+    assert(http.requests.back().username.empty() && http.requests.back().password.empty());
+  }
+  // The login is never offered to another origin or over a stored token.
+  {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    http.replies.push_back({200, FEED, ""});
+    OpdsFeedParser parser;
+    assert(client.fetchFeed("https://other.test/opds", parser) == OpdsClient::FetchStatus::Ok);
+    assert(http.requests.back().username.empty());
+  }
+  {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    client.setTokens("token", "", "");
+    http.replies.push_back({200, FEED, ""});
+    OpdsFeedParser parser;
+    assert(client.fetchFeed(ROOT, parser) == OpdsClient::FetchStatus::Ok);
+    assert(http.requests.back().username.empty() && http.requests.back().bearer == "token");
+    // The token and custom headers stay with the server's origin too.
+    const auto foreign = client.downloadAuth("https://other.test/book.epub");
+    assert(foreign.bearer.empty() && foreign.headers.empty());
+    assert(client.downloadAuth(ROOT + "/book.epub").headers.size() == 1);
+  }
+  // A 401 from another origin never starts a login handshake.
+  {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    client.setTokens("token", "refresh", ROOT + "/refresh");
+    http.replies = {{401, OAUTH_DOC, ""}};
+    OpdsFeedParser parser;
+    assert(client.fetchFeed("https://other.test/opds", parser) == OpdsClient::FetchStatus::AuthFailed);
+    assert(http.requests.size() == 1 && http.forms.empty());
+    assert(!client.tokensDirty() && client.accessToken() == "token");
+    assert(!client.authenticateDownload("https://other.test/book.epub"));
+    assert(http.requests.size() == 1 && http.forms.empty());
+  }
+  {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    http.replies = {{401, "", ""}, {401, OAUTH_DOC, ""}, {200, FEED, ""}};
+    http.posts = {{200, R"({"access_token":"access"})", ""}};
+    OpdsFeedParser parser;
+    assert(client.fetchFeed(ROOT, parser) == OpdsClient::FetchStatus::Ok);
+    assert(http.requests[0].username == "reader");
+    assert(http.requests[1].username.empty());
+    assert(http.requests[2].bearer == "access" && http.requests[2].username.empty());
+    assert(!client.useBasicAuth());
+  }
+  // Acquisition-only Basic challenge on a download.
+  {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    http.replies.push_back({401, "<html>Login required</html>", "Basic realm=books"});
+    assert(client.authenticateDownload(ROOT + "/book.epub"));
+    const auto auth = client.downloadAuth(ROOT + "/book.epub");
+    assert(auth.username == "reader" && auth.password == "secret" && auth.bearer.empty());
+    assert(client.downloadAuth("https://other.test/book.epub").username.empty());
+    assert(auth.headers.size() == 1);
+    assert(http.requests.back().username.empty());
+  }
+  // Challenge matching must ignore quoted commas and auth-params named Basic.
+  for (const auto& challenge : {"Basic realm=books", "bAsIc realm=books",
+                               "Digest realm=books, Basic realm=books", "Bearer realm=\"a,b\", Basic realm=books"}) {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    http.replies.push_back({401, "", challenge});
+    assert(client.authenticateDownload(ROOT));
+  }
+  for (const auto& challenge : {"", "Bearer realm=books", "Digest realm=\"x, Basic realm=y\"",
+                               "Bearer realm=books, Basic =value", "BasicOther realm=books"}) {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    http.replies.push_back({401, "", challenge});
+    assert(!client.authenticateDownload(ROOT));
+    assert(!client.useBasicAuth());
+  }
+  for (const auto& reply : {Reply{403, "", "Basic realm=books"}, Reply{401, BASIC_DOC, "", true}}) {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    http.replies.push_back(reply);
+    assert(!client.authenticateDownload(ROOT));
+    assert(!client.useBasicAuth());
+  }
+  // Existing feed authentication and OPDS Basic documents still work.
+  {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    http.replies = {{401, "", ""}, {401, BASIC_DOC, ""}, {200, FEED, ""}};
+    OpdsFeedParser parser;
+    assert(client.fetchFeed(ROOT, parser) == OpdsClient::FetchStatus::Ok);
+    assert(http.requests.back().username == "reader");
+    assert(client.tokensDirty());
+  }
+  // Missing and rejected credentials terminate without unbounded retries.
+  {
+    Transport http;
+    OpdsClient client(http);
+    client.setServer(ROOT, "", "", {});
+    http.replies = {{401, "", "Basic realm=books"}};
+    assert(!client.authenticateDownload(ROOT));
+    assert(client.credentialsMissing());
+  }
+  {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    for (int i = 0; i < 5; ++i) http.replies.push_back({401, "", "Basic realm=books"});
+    OpdsFeedParser parser;
+    assert(client.fetchFeed(ROOT, parser) == OpdsClient::FetchStatus::AuthFailed);
+    assert(http.replies.empty());
+  }
+  // OAuth retains precedence over Basic and download-time tokens can be persisted.
+  {
+    Transport http;
+    OpdsClient client(http);
+    configure(client);
+    http.replies = {{401, OAUTH_DOC, "Basic realm=books"}};
+    http.posts = {{200, R"({"access_token":"access","refresh_token":"refresh"})", ""}};
+    assert(client.authenticateDownload(ROOT));
+    assert(client.downloadAuth(ROOT).bearer == "access");
+    assert(client.downloadAuth(ROOT).username.empty());
+    assert(client.tokensDirty());
+    assert(http.forms.front().find("grant_type=password") == 0);
+    http.posts = {{200, R"({"access_token":"renewed"})", ""}};
+    assert(client.authenticateDownload(ROOT));
+    assert(client.accessToken() == "renewed");
+    assert(http.forms.back().find("grant_type=refresh_token") == 0);
+    assert(http.replies.empty());
+    // Failed refresh falls back to the resource's challenge.
+    http.posts = {{401, "", ""}};
+    http.replies = {{401, "", "Basic realm=books"}};
+    assert(client.authenticateDownload(ROOT));
+    assert(client.useBasicAuth());
+    assert(client.accessToken().empty() && client.refreshToken().empty());
+  }
+  std::puts("OPDS client authentication tests passed");
+}

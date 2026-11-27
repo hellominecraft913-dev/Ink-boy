@@ -52,7 +52,7 @@ struct LiveLightSwipeState {
 #endif
 
 enum class RequestUpdateResult { Rendered, Rejected };
-enum class HomeMenuItem { NONE, FILE_BROWSER, LIBRARY, FILE_TRANSFER, SETTINGS_MENU, PLUGINS };
+enum class HomeMenuItem { NONE, FILE_BROWSER, GAME_LIBRARY, LIBRARY, FILE_TRANSFER, SETTINGS_MENU, PLUGINS };
 
 /**
  * ActivityManager
@@ -173,6 +173,10 @@ class ActivityManager {
                     bool touchscreenRecovery = false);
   void markReleaseNotesShown() { releaseNotesShown = true; }
   void goToFileBrowser(std::string path = {});
+#if CROSSINK_GAMEBOY
+  void goToGameLibrary();
+  void goToGameBoy(std::string path);
+#endif
   void goToLibrary();
   void goToBrowser();
   bool goToPlugins(bool networkBootReady = false);

@@ -124,10 +124,25 @@ bool hasFileMetadata(const std::string& path) {
          FsHelpers::hasMarkdownExtension(path);
 }
 
+
 bool isSupportedBrowserFile(std::string_view filename) {
-  return FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
-         FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
-         FsHelpers::hasBmpExtension(filename) || FsHelpers::hasPngExtension(filename);
+  const bool common =
+      FsHelpers::hasEpubExtension(filename) ||
+      FsHelpers::hasXtcExtension(filename) ||
+      FsHelpers::hasTxtExtension(filename) ||
+      FsHelpers::hasMarkdownExtension(filename) ||
+      FsHelpers::hasBmpExtension(filename) ||
+      FsHelpers::hasPngExtension(filename);
+
+  bool emulatorRom = false;
+
+#if CROSSINK_GAMEBOY
+  emulatorRom = emulatorRom ||
+      FsHelpers::checkFileExtension(filename, ".gb") ||
+      FsHelpers::checkFileExtension(filename, ".gbc");
+#endif
+
+  return common || emulatorRom;
 }
 
 bool acceptCommon(const char* name, bool isDir) {

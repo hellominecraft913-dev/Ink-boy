@@ -47,6 +47,7 @@ class HalDisplay {
   static constexpr uint16_t DISPLAY_HEIGHT = EInkDisplay::DISPLAY_HEIGHT;
   static constexpr uint16_t DISPLAY_WIDTH_BYTES = DISPLAY_WIDTH / 8;
   static constexpr uint32_t BUFFER_SIZE = DISPLAY_WIDTH_BYTES * DISPLAY_HEIGHT;
+  static constexpr uint32_t X3_BUFFER_SIZE = EInkDisplay::X3_BUFFER_SIZE;
 
   // Frame buffer operations
   void clearScreen(uint8_t color = 0xFF) const;
@@ -134,11 +135,97 @@ class HalDisplay {
   bool shouldSkipImageBlanking() const;
   bool supportsStripGrayscale() const;
 
+
+void setFastRefreshTuning(uint8_t tsset, uint8_t pll) {
+  setFastRefreshTuningIfSupported(einkDisplay, tsset, pll);
+}
+
+void setFastRefreshDuScale(uint8_t percent) {
+  setFastRefreshDuScaleIfSupported(einkDisplay, percent);
+}
+
+void setFastRefreshDiffWindow(bool on) {
+  setFastRefreshDiffWindowIfSupported(einkDisplay, on);
+}
+
+
+  // The last completed refresh's phases in microseconds and refresh counts.
+  bool lastRefreshTimings(uint32_t out[8]) const {
+    return lastRefreshTimingsIfSupported(einkDisplay, out);
+  }
+
+  // A game's overlapped refresh: finish the previous refresh, then start
+  // this one without waiting for its waveform to finish.
+  void displayBufferOverlapped(RefreshMode mode);
+
+  // Wait for any pending overlapped refresh to finish.
+  void finishOverlapped();
+
+  // The display SPI clock for a game (0 = the driver default).
+  void setDisplaySpiHz(uint32_t hz) {
+    setDisplaySpiHzIfSupported(einkDisplay, hz);
+  }
+
+  // Runtime geometry passthrough
+
   // Runtime geometry passthrough
   uint16_t getDisplayWidth() const;
   uint16_t getDisplayHeight() const;
   uint16_t getDisplayWidthBytes() const;
   uint32_t getBufferSize() const;
+
+
+template <typename Display>
+static void setFastRefreshTuningIfSupported(
+    Display& target, uint8_t tsset, uint8_t pll) {
+  if constexpr (requires {
+                  target.setFastRefreshTuning(tsset, pll);
+                }) {
+    target.setFastRefreshTuning(tsset, pll);
+  }
+}
+
+template <typename Display>
+static void setFastRefreshDuScaleIfSupported(
+    Display& target, uint8_t percent) {
+  if constexpr (requires {
+                  target.setFastRefreshDuScale(percent);
+                }) {
+    target.setFastRefreshDuScale(percent);
+  }
+}
+
+template <typename Display>
+static void setFastRefreshDiffWindowIfSupported(
+    Display& target, bool on) {
+  if constexpr (requires {
+                  target.setFastRefreshDiffWindow(on);
+                }) {
+    target.setFastRefreshDiffWindow(on);
+  }
+}
+
+template <typename Display>
+static bool lastRefreshTimingsIfSupported(
+    const Display& target, uint32_t out[8]) {
+  if constexpr (requires {
+                  target.lastRefreshTimings(out);
+                }) {
+    return target.lastRefreshTimings(out);
+  }
+
+  return false;
+}
+
+template <typename Display>
+static void setDisplaySpiHzIfSupported(
+    Display& target, uint32_t hz) {
+  if constexpr (requires {
+                  target.setDisplaySpiHz(hz);
+                }) {
+    target.setDisplaySpiHz(hz);
+  }
+}
 
  private:
   void beginHardware();

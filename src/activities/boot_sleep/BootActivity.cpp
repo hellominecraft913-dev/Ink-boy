@@ -131,7 +131,8 @@ void drawDefaultBootLogo(const GfxRenderer& renderer) {
 
   renderer.clearScreen();
   renderer.drawImage(Logo120, (pageWidth - 120) / 2, (pageHeight - 120) / 2, 120, 120);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_CROSSINK), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70,
+                          "Ink-boy", true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_BOOTING));
   const auto safe = UITheme::getInstance().getScreenSafeArea(renderer);
   GUI.drawHelpText(renderer, Rect{safe.x, safe.y + safe.height - 30, safe.width, 30}, AppVersion::version());

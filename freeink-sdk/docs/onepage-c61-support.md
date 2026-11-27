@@ -1,0 +1,80 @@
+# OnePage ESP32-C61 Board Support
+
+## Overview
+
+**OnePage Reader** is an open-hardware DIY E-reader built around the **ESP32-C61** RISC-V wireless SoC.
+Main ecosystem repo: [MoveCall/onepage-reader](https://github.com/MoveCall/onepage-reader)
+
+This document describes the FreeInk SDK board support profile for OnePage (`FREEINK_DEVICE_ONEPAGE`).
+
+## Hardware Specifications
+
+| Subsystem | Specification / Pinout |
+|:---|:---|
+| **SoC** | ESP32-C61 (ESP32-C61HR2, 160MHz RISC-V, Wi-Fi 6, BLE 5.4, 16MB Flash, 2MB PSRAM @ 40MHz) |
+| **Display** | 4.26" E-Ink Display, **SSD1677** controller, **800 × 480** resolution, 4-level grayscale |
+| **Display SPI** | SCLK: `GPIO22`, MOSI: `GPIO23`, CS: `GPIO25`, DC: `GPIO8`, RST: `GPIO27`, BUSY: `GPIO29` · **20 MHz** |
+| **MicroSD Card** | SPI mode (shared SPI bus with EPD): SCLK: `GPIO22`, MISO: `GPIO24`, MOSI: `GPIO23`, CS: `GPIO26` · **20 MHz** |
+| **Buttons (Front 4-Key)** | Single resistor ADC ladder on `GPIO4` (ADC1_CH2):<br>• `BACK`: 2400..2800 mV (~2592 mV)<br>• `LEFT`: 1780..2140 mV (~1956 mV)<br>• `RIGHT`: 1140..1500 mV (~1316 mV)<br>• `CONFIRM` (ENTER): 0..250 mV (~0 mV) |
+| **Buttons (Side 3-Key)** | Active-low GPIO buttons with internal pull-up:<br>• `UP` (PREV): `GPIO6`<br>• `DOWN` (NEXT): `GPIO9`<br>• `POWER` (WAKE): `GPIO2` (Deep-sleep wakeup source) |
+| **Battery & Charging** | • Battery ADC: `GPIO5` (ADC1_CH3, multiplier ×2.0)<br>• USB / Charge Detect: `GPIO11` (UART0_RXD, LM66200 ST open-drain, low = USB present)<br>• Charge Pause: `GPIO10` (`BAT_CHG_EN`, drive LOW during ADC sample to avoid charger offset) |
+| **Power Architecture** | `GPIO27` serves as both EPD RST and shared SD power rail enable. Silenced before deep sleep. |
+| **Bluetooth Remote** | BLE HID Central / Host support for wireless page turners |
+
+## FreeInk SDK Profile
+
+The [OnePage board profile](../libs/hardware/BoardConfig/include/BoardConfig.h)
+defines the pinout. Enable the pull-up on GPIO11 before checking for a USB
+cable. The profile sets `usbDetectActiveHigh` to `false` because GPIO11 goes
+low when a cable is connected.
+
+## Display configuration
+
+OnePage uses the Level 2 booster `AE C7 C3 C0 80` and B/W partial update
+sequence `0xFC` from the
+[Osptek EPD0426A02 reference driver](https://github.com/osptek/display-epd-4.26inch-480x800/blob/4dda8930794924713c0def9d492cc7b91464139f/examples/esp32s3-ssd1677-spi-bringup/main/app_init/epd_ssd1677.c).
+Partial updates load temperature and keep the panel powered; sunlight fading
+compensation powers it off separately after the update. Contrast and edge
+quality with these settings still require hardware validation.
+
+Display SPI runs at 20 MHz, the write limit in the
+[SSD1677 timing table](https://github.com/osptek/display-epd-4.26inch-480x800/blob/4dda8930794924713c0def9d492cc7b91464139f/versions/EPD0426A02/datasheets/SSD_1677_447731c055.pdf).
+This increases transfer time compared with 40 MHz; the panel waveform timing
+is unchanged. Border remains `0x01`. A cold paint uses the warmed
+HALF waveform, including when sunlight fading compensation requests power-off.
+Grayscale retains the existing SDK tables; Osptek's absolute four-tone table
+is not a replacement for the SDK's text anti-aliasing overlay.
+
+These settings use the shared SSD1677 driver through a OnePage-specific
+configuration. The FreeInk HAL, deferred refresh, buffer cleanup, and sleep/wake
+lifecycle remain in use. The SD card shares the bus at its own 20 MHz rate.
+Other boards keep their existing display configuration.
+
+On hardware, compare page turns and the background tone with the same book and
+settings. Check text anti-aliasing on and off, periodic clean refreshes, sunlight
+fading compensation, all four orientations, and repeated sleep/wake. Watch for
+ghosting, a dark border, incomplete refreshes, or SD read failures. The vendor
+settings alone do not establish a speed or contrast improvement on every panel.
+
+## Build Configuration
+
+Add the following to your project's `platformio.ini`:
+
+```ini
+[env:onepage]
+extends = base
+board = onepage-c61
+board_build.mcu = esp32c61
+custom_sdkconfig =
+  CONFIG_SPIRAM=y
+  CONFIG_SPIRAM_MODE_QUAD=y
+  CONFIG_SPIRAM_SPEED_40M=y
+  CONFIG_SPIRAM_USE_MALLOC=y
+  CONFIG_SPIRAM_BOOT_INIT=y
+  CONFIG_SPIRAM_BOOT_HW_INIT=y
+  CONFIG_BT_LE_SLEEP_ENABLE=y
+  CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+build_flags =
+  ${base.build_flags}
+  -DFREEINK_DEVICE_ONEPAGE=1
+```

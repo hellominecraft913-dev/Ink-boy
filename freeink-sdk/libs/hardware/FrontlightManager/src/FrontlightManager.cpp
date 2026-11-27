@@ -1,0 +1,808 @@
+#include "FrontlightManager.h"
+
+#if FREEINK_DEVICE_PICCO
+#include <algorithm>
+#include <cmath>
+#endif
+
+#if FREEINK_CAP_FRONTLIGHT
+#include <I2cBusLock.h>
+#include <M5Pm1.h>
+#include <Wire.h>
+#include <driver/gpio.h>  // gpio_hold_en/dis in prepareForDeepSleep()/begin()
+
+#include "FrontlightManager.h"
+#ifdef FREEINK_FRONTLIGHT_LS
+#include <driver/ledc.h>
+// esp_sleep_sub_mode_config lives in a private IDF header (no public API exists
+// for balancing the refcounted RC_FAST keep-on the LEDC driver takes for
+// KEEP_ALIVE channels — the driver manages it through this same header). Pinned
+// IDF 5.5; re-check on IDF bumps.
+#include <esp_private/esp_sleep_internal.h>
+#endif
+
+// Logging: use the firmware's Logging.h LOG_INF facility, NOT esp_log. The
+// prebuilt Arduino sdkconfig sets CONFIG_LOG_DEFAULT_LEVEL_ERROR, so ESP_LOGI is
+// compiled out, and esp_log writes to the IDF UART console rather than the
+// firmware's Serial stream the monitor reads. LOG_INF routes through logPrintf
+// to the firmware Serial and the crash-report ring buffer.
+#include <Logging.h>
+#if FREEINK_DEVICE_EEGO_A4
+#include <EegoDeviceId.h>
+
+#include "EegoUnlitUnits.h"
+#endif
+
+namespace {
+constexpr uint32_t maxDuty(uint8_t bits) { return (1u << bits) - 1u; }
+
+// Perception-weighted percent -> duty, gamma 1.6554: 16-bit fixed-point table
+// of round(65535 * (pct/100)^1.6554). The exponent is log(2*1023)/log(100),
+// picked so on a 10-bit duty range 1% rounds up to exactly 1 LSB (the dimmest
+// possible light) and every 1% step maps to a distinct duty — gamma 2 was too
+// steep and collapsed 1-4% into the same single-LSB duty.
+static constexpr uint16_t GAMMA_TABLE[101] = {
+    0,     32,    101,   197,   318,   460,   622,   803,   1001,  1217,  1449,  1697,  1960,  2237,  2529,
+    2835,  3155,  3488,  3834,  4193,  4565,  4949,  5345,  5753,  6173,  6604,  7047,  7502,  7967,  8444,
+    8931,  9429,  9938,  10457, 10987, 11527, 12077, 12638, 13208, 13789, 14379, 14979, 15588, 16208, 16836,
+    17474, 18122, 18779, 19445, 20120, 20804, 21497, 22200, 22911, 23631, 24360, 25097, 25843, 26598, 27362,
+    28134, 28914, 29703, 30500, 31306, 32120, 32942, 33772, 34611, 35457, 36312, 37175, 38045, 38924, 39811,
+    40705, 41608, 42518, 43436, 44361, 45295, 46236, 47185, 48141, 49105, 50076, 51055, 52042, 53036, 54037,
+    55046, 56062, 57086, 58117, 59155, 60200, 61253, 62313, 63380, 64454, 65535};
+
+constexpr uint32_t perceptualDuty(uint32_t pct, uint32_t full) {
+  if (pct == 0) return 0;
+  if (pct > 100) pct = 100;
+  const uint32_t duty = (full * GAMMA_TABLE[pct] + 32767u) / 65535u;
+  return duty ? duty : 1u;
+}
+
+// Paper Mono: the PWM lives in the M5PM1 PMIC, not the ESP. PM1 GPIO3 routed to
+// alt-function PWM0 drives the AW9967 frontlight driver. Duty register is
+// 12-bit; the high byte's bit 4 is the channel-enable bit. Perception-weighted
+// like M5Unified's bring-up: duty = brightness^2 scaled into 12 bits.
+constexpr uint8_t PM1_PWM_ENABLE = 0x10;
+
+void pm1FrontlightAttach(uint32_t freqHz) {
+  freeink::m5pm1::beginBus();
+  // GPIO3 to push-pull, alt-function PWM0.
+  freeink::m5pm1::updateReg(freeink::m5pm1::REG_GPIO_DRV, 1u << 3, 0);
+  freeink::m5pm1::updateReg(freeink::m5pm1::REG_GPIO_FUNC0, 0xC0, 0xC0);
+  freeink::m5pm1::writeReg16(freeink::m5pm1::REG_PWM_FREQ_L, static_cast<uint16_t>(freqHz));
+}
+
+void pm1FrontlightWrite(uint32_t pct) {
+  uint32_t duty = (pct * pct * 4095u) / 10000u;  // 0-100% -> 12-bit, gamma ~2
+  if (pct && !duty) duty = 1;                    // 1% stays lit, as on the LEDC path
+  const uint8_t data[2] = {static_cast<uint8_t>(duty & 0xFF),
+                           static_cast<uint8_t>(((duty >> 8) & 0x0F) | (duty ? PM1_PWM_ENABLE : 0))};
+  freeink::m5pm1::writeBytes(freeink::m5pm1::REG_PWM0_DUTY_L, data, sizeof(data));
+}
+
+// Fixed LEDC channels for the Arduino-ESP32 2.x path (3.x keys by GPIO and allocates
+// channels itself). Frontlight owns 0 (cool/primary) and 1 (warm); no other SDK LEDC
+// user on a frontlight board takes these (the Buzzer uses the 3.x gpio-keyed API).
+constexpr uint8_t LEDC_CH_COOL = 0;
+constexpr uint8_t LEDC_CH_WARM = 1;
+
+// Apply the board's output polarity to a logical 0..full LED duty.
+uint32_t physicalDuty(uint32_t logicalDuty, uint32_t full, bool activeHigh) {
+  return activeHigh ? logicalDuty : full - logicalDuty;
+}
+
+#ifdef FREEINK_FRONTLIGHT_LS
+// Light-sleep-surviving LEDC: clock the timer from RC_FAST (~17.5 MHz on the
+// S3 — the practical LEDC source that keeps running through light sleep at
+// near-zero extra sleep power; XTAL can also be kept up but costs far more in
+// sleep current), mark the
+// channels KEEP_ALIVE, and disable the GPIO sleep-isolation override on the
+// output pins (a documented gotcha: sleep entry reconfigures the pad and kills
+// the PWM even when the clock survives). RC_FAST at 10 kHz supports up to
+// 10-bit resolution (17.5 MHz / 10 kHz = 1750 >= 1024), so the board profiles'
+// full duty range — including setBrightnessLevel's level-1 minimum step — stays
+// expressible. Uses the IDF driver directly (fixed LEDC_TIMER_0 + the channel
+// ids below) because the Arduino helpers don't expose sleep_mode; safe here
+// because frontlight boards using this flag have no other LEDC consumer.
+bool attachChannel(int8_t gpio, uint8_t ch, uint32_t freq, uint8_t bits) {
+  ledc_timer_config_t timer = {};
+  timer.speed_mode = LEDC_LOW_SPEED_MODE;
+  timer.duty_resolution = static_cast<ledc_timer_bit_t>(bits);
+  timer.timer_num = LEDC_TIMER_0;
+  timer.freq_hz = freq;
+  timer.clk_cfg = LEDC_USE_RC_FAST_CLK;
+  if (ledc_timer_config(&timer) != ESP_OK) {
+    // freq/bits exceed RC_FAST — leave the light unconfigured rather than
+    // silently falling back to a clock that freezes in light sleep.
+    return false;
+  }
+  ledc_channel_config_t chan = {};
+  chan.gpio_num = gpio;
+  chan.speed_mode = LEDC_LOW_SPEED_MODE;
+  chan.channel = static_cast<ledc_channel_t>(ch);
+  chan.intr_type = LEDC_INTR_DISABLE;
+  chan.timer_sel = LEDC_TIMER_0;
+  chan.duty = 0;
+  chan.hpoint = 0;
+  chan.sleep_mode = LEDC_SLEEP_MODE_KEEP_ALIVE;
+  // ledc_channel_config() disables the pad's sleep-isolation override itself
+  // for KEEP_ALIVE channels (IDF 5.5), so no explicit gpio_sleep_sel_dis here.
+  return ledc_channel_config(&chan) == ESP_OK;
+}
+void writeChannel(int8_t /*gpio*/, uint8_t ch, uint32_t duty) {
+  ledc_set_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(ch), duty);
+  ledc_update_duty(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(ch));
+}
+void detachChannel(int8_t /*gpio*/, uint8_t ch) {
+  // Stop the timer output on this channel; the idle level it parks at is
+  // irrelevant because parkPinForSleep() takes the pad over immediately after.
+  ledc_stop(LEDC_LOW_SPEED_MODE, static_cast<ledc_channel_t>(ch), 0);
+}
+#elif defined(ARDUINO) && ESP_ARDUINO_VERSION_MAJOR >= 3
+bool attachChannel(int8_t gpio, uint8_t /*ch*/, uint32_t freq, uint8_t bits) { return ledcAttach(gpio, freq, bits); }
+void writeChannel(int8_t gpio, uint8_t /*ch*/, uint32_t duty) { ledcWrite(gpio, duty); }
+void detachChannel(int8_t gpio, uint8_t /*ch*/) { ledcDetach(gpio); }
+#else
+bool attachChannel(int8_t gpio, uint8_t ch, uint32_t freq, uint8_t bits) {
+  ledcSetup(ch, freq, bits);
+  ledcAttachPin(gpio, ch);
+  return true;
+}
+void writeChannel(int8_t /*gpio*/, uint8_t ch, uint32_t duty) { ledcWrite(ch, duty); }
+void detachChannel(int8_t gpio, uint8_t /*ch*/) { ledcDetachPin(gpio); }
+#endif
+
+// Release a pad hold left by a previous prepareForDeepSleep(). gpio_hold_en
+// survives the deep-sleep wake reset, and a held pad silently ignores both the
+// LEDC routing and any GPIO write -- the light would never come back on.
+void releasePinHold(int8_t gpio) {
+  if (gpio == BoardConfig::PIN_UNASSIGNED) return;
+  gpio_hold_dis(static_cast<gpio_num_t>(gpio));
+}
+
+// Hand the pad from LEDC back to plain GPIO, drive the LED's INACTIVE level and
+// latch it for deep sleep. Deliberately not left to
+// esp_sleep_config_gpio_isolate(): an isolated pad floats, and what the light
+// then does depends on an external pull that is a board-layout detail (on a
+// board whose PWM gates a boost converter's EN pin through a pull-up, floating
+// reads as ON). A lit frontlight is by far the largest load a sleeping reader
+// can carry, so it gets driven off explicitly rather than assumed off. LEDC is
+// stopped first, or the peripheral output keeps overriding the GPIO write at the
+// pad.
+void parkPinForSleep(int8_t gpio, uint8_t ch, bool activeHigh) {
+  if (gpio == BoardConfig::PIN_UNASSIGNED) return;
+  detachChannel(gpio, ch);
+  const auto g = static_cast<gpio_num_t>(gpio);
+  gpio_hold_dis(g);
+  pinMode(gpio, OUTPUT);
+  digitalWrite(gpio, activeHigh ? LOW : HIGH);
+  gpio_hold_en(g);
+}
+}  // namespace
+#endif
+
+void FrontlightManager::begin() {
+#if FREEINK_CAP_FRONTLIGHT
+  const auto& fl = BoardConfig::ACTIVE.frontlight;
+#if FREEINK_DEVICE_EEGO_A4
+  const auto& i2c = BoardConfig::ACTIVE.i2cFrontlight;
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::EegoA4 &&
+      i2c.controller == BoardConfig::I2cFrontlightController::Lm3630a) {
+    if (i2c.sda < 0 || i2c.scl < 0 || i2c.enable < 0 || i2c.address == 0) return;
+    const freeink::I2cBusLock busLock;  // the touch controller may still be booting on this bus
+    Wire.begin(i2c.sda, i2c.scl, i2c.i2cHz);
+    Wire.setTimeOut(256);
+    pinMode(i2c.enable, OUTPUT);
+    digitalWrite(i2c.enable, LOW);
+
+    // The OEM firmware contains an LM3630A path, but at least one retail EEGO
+    // A4 revision has no frontlight hardware populated. Probe with the recovered
+    // enable sequence so an absent option stays off and is not exposed as a
+    // capability merely because its driver exists in a shared firmware image.
+    digitalWrite(i2c.enable, HIGH);
+    delay(2);
+    Wire.beginTransmission(i2c.address);
+    const bool detected = Wire.endTransmission() == 0;
+    digitalWrite(i2c.enable, LOW);
+    if (!detected) return;
+    // The controller is fitted on some unlit units too; stock lists those.
+    uint32_t uid = 0;
+    if (freeink::readEegoA4Uid(uid) && freeink::eegoA4UidHasNoFrontlight(uid)) {
+      return;
+    }
+
+    _begun = true;
+    _brightness = 0;
+    return;
+  }
+#endif
+#if FREEINK_DEVICE_PICCO
+  {
+    const auto& i2c = BoardConfig::ACTIVE.i2cFrontlight;
+    if (BoardConfig::ACTIVE.board == BoardConfig::Board::Picco &&
+        i2c.controller == BoardConfig::I2cFrontlightController::PiccoDualLed) {
+      if (i2c.sda < 0 || i2c.scl < 0 || i2c.address == 0) return;
+      Wire.begin(i2c.sda, i2c.scl, i2c.i2cHz);
+      Wire.setTimeOut(256);
+      // Shared I2C bus (with touch); no dedicated enable GPIO. Probe the operating
+      // address so an absent/unexpected part is not exposed as a capability.
+      Wire.beginTransmission(i2c.address);
+      if (Wire.endTransmission() != 0) return;
+      _begun = true;
+      _brightness = 0;
+      _i2cConfigured = false;
+      return;
+    }
+  }
+#endif
+  if (fl.viaPm1Pwm) {
+    pm1FrontlightAttach(fl.pwmFrequency);
+    _begun = true;
+    setBrightness(0);
+    return;
+  }
+  if (fl.gpio == BoardConfig::PIN_UNASSIGNED) return;
+
+  // prepareForDeepSleep() latched these pads at the LED's off level, and the
+  // hold survives the wake reset. Release it before LEDC claims the pins, or the
+  // frontlight is dead after the first sleep/wake cycle.
+  releasePinHold(fl.gpio);
+  releasePinHold(fl.gpioWarm);
+
+  bool attachOk = attachChannel(fl.gpio, LEDC_CH_COOL, fl.pwmFrequency, fl.pwmResolutionBits);
+  if (fl.gpioWarm != BoardConfig::PIN_UNASSIGNED) {
+    attachOk = attachChannel(fl.gpioWarm, LEDC_CH_WARM, fl.pwmFrequency, fl.pwmResolutionBits) || attachOk;
+  }
+#ifdef FREEINK_FRONTLIGHT_LS
+  // Defensive: a prior sleep cycle may have left the pads held (park() latches a
+  // digital hold that survives deep sleep AND the wake reset while the _lsParked
+  // DRAM flag is lost). Release any surviving hold here so begin() always starts
+  // from a clean pad — a held pad silently ignores the LEDC drive below. The
+  // release is unconditional (gpio_hold_dis on a non-held pad is a harmless no-op)
+  // because we cannot trust _lsParked after a reset.
+  for (const int8_t pin : {fl.gpio, fl.gpioWarm}) {
+    if (pin >= 0) gpio_hold_dis(static_cast<gpio_num_t>(pin));
+  }
+  _lsParked = false;
+  LOG_INF("FrontlightMgr", "begin: cleared any stale held pads");
+  // The FIRST successful KEEP_ALIVE channel config takes a single refcounted +1
+  // on the RC_FAST sleep sub-mode (esp_sleep_sub_mode_config; the driver's
+  // global-clock latch means later configs don't take another), which would
+  // keep RC_FAST — and the digital domain at its higher sleep bias — powered
+  // through every light-sleep window from boot, even with the light off.
+  // Balance it here and let apply() re-arm only while the light is actually
+  // lit. attachOk is true when ANY channel config succeeded (exactly the
+  // condition under which the driver's +1 was taken); the !_begun guard keeps a
+  // hypothetical second begin() from decrementing twice.
+  _lsAttachOk = attachOk;
+  _lsKeepAliveArmed = false;
+  if (attachOk && !_begun) {
+    esp_sleep_sub_mode_config(ESP_SLEEP_DIG_USE_RC_FAST_MODE, false);
+  }
+#else
+  (void)attachOk;
+#endif
+  _begun = true;
+  setBrightness(0);
+  LOG_INF("FrontlightMgr", "begin: attached gpio=%d warm=%d ok=%d", fl.gpio, fl.gpioWarm, attachOk ? 1 : 0);
+#endif
+}
+
+#if FREEINK_CAP_FRONTLIGHT
+#if FREEINK_DEVICE_EEGO_A4
+bool FrontlightManager::lm3630aWrite(const uint8_t reg, const uint8_t value) {
+  const freeink::I2cBusLock busLock;
+  const auto& cfg = BoardConfig::ACTIVE.i2cFrontlight;
+  Wire.beginTransmission(cfg.address);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool FrontlightManager::lm3630aRead(const uint8_t reg, uint8_t& value) {
+  const freeink::I2cBusLock busLock;
+  const auto& cfg = BoardConfig::ACTIVE.i2cFrontlight;
+  Wire.beginTransmission(cfg.address);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(cfg.address, static_cast<uint8_t>(1), static_cast<uint8_t>(true)) != 1) return false;
+  value = Wire.read();
+  return true;
+}
+
+bool FrontlightManager::lm3630aUpdate(const uint8_t reg, const uint8_t mask, const uint8_t value) {
+  uint8_t current = 0;
+  if (!lm3630aRead(reg, current)) return false;
+  return lm3630aWrite(reg, static_cast<uint8_t>((current & ~mask) | (value & mask)));
+}
+
+bool FrontlightManager::configureLm3630a() {
+  const auto& cfg = BoardConfig::ACTIVE.i2cFrontlight;
+  digitalWrite(cfg.enable, HIGH);
+  delay(2);
+  bool present = false;
+  {
+    const freeink::I2cBusLock busLock;
+    Wire.beginTransmission(cfg.address);
+    present = Wire.endTransmission() == 0;
+  }
+  if (!present) {
+    digitalWrite(cfg.enable, LOW);
+    return false;
+  }
+
+  // Exact EEGO A4 sequence recovered from HalBacklight/LM3630A in CrossLink.
+  // Register meanings follow TI SNVS974B: filter, config, boost, max-current A/B,
+  // control, then the two brightness banks.
+  bool ok = lm3630aWrite(0x50, 0x03);
+  ok = lm3630aUpdate(0x01, 0x07, 0x00) && ok;
+  ok = lm3630aWrite(0x02, 0x38) && ok;
+  ok = lm3630aUpdate(0x05, 0x1f, 0x10) && ok;
+  ok = lm3630aUpdate(0x06, 0x1f, 0x10) && ok;
+  ok = lm3630aUpdate(0x00, 0x14, 0x00) && ok;
+  ok = lm3630aUpdate(0x00, 0x0b, 0x00) && ok;
+  delay(2);
+  ok = lm3630aWrite(0x03, 0x00) && ok;
+  ok = lm3630aWrite(0x04, 0x00) && ok;
+  _i2cConfigured = ok;
+  if (!ok) digitalWrite(cfg.enable, LOW);
+  return ok;
+}
+
+void FrontlightManager::applyLm3630a() {
+  const auto& cfg = BoardConfig::ACTIVE.i2cFrontlight;
+  if (_brightness == 0) {
+    if (_i2cConfigured) {
+      lm3630aWrite(0x03, 0);
+      lm3630aWrite(0x04, 0);
+    }
+    digitalWrite(cfg.enable, LOW);
+    _i2cConfigured = false;
+    return;
+  }
+  if (!_i2cConfigured && !configureLm3630a()) return;
+
+  const uint8_t level = static_cast<uint16_t>(_brightness) * 255 / 100;
+  // Constant-brightness warm/cool mix. configureLm3630a() leaves both banks in
+  // the LM3630A's exponential mapping (REG_CTRL linear bits 0x10/0x08 clear),
+  // where light ~ 0.85^(44 - (code + 1) / 5.8): half the code is ~3% of the
+  // light, so splitting codes linearly made one colour vanish on each half of
+  // the slider. Split the requested *light* instead and convert each share
+  // back to a code, so total output stays at the brightness setting for any
+  // warmth and the two colours blend.
+  const auto codeToLight = [](const float code) { return powf(0.85f, 44.0f - (code + 1.0f) / 5.8f); };
+  const auto lightToCode = [](const float light) -> uint8_t {
+    if (light <= 0.0f) return 0;
+    const float code = 5.8f * (44.0f - logf(light) / logf(0.85f)) - 1.0f;
+    if (code < 4.0f) return 0;  // below the IC's lowest visible code
+    return code >= 255.0f ? 255 : static_cast<uint8_t>(code + 0.5f);
+  };
+  const float total = codeToLight(level);
+  const float warmShare = static_cast<float>(_warmPercent) / 100.0f;
+  uint8_t warm = _warmPercent == 0 ? 0 : lightToCode(total * warmShare);
+  uint8_t cool = _warmPercent == 100 ? 0 : lightToCode(total * (1.0f - warmShare));
+  // At low brightness a share can fall below the IC's lowest visible code.
+  // Give that light to the other channel so the total still matches.
+  if (warm == 0 && cool == 0) {
+    (_warmPercent >= 50 ? warm : cool) = std::max<uint8_t>(4, lightToCode(total));
+  } else if (warm == 0) {
+    cool = lightToCode(total);
+  } else if (cool == 0) {
+    warm = lightToCode(total);
+  }
+  // The IC ignores brightness codes 1..3; preserve a visible nonzero request.
+  if (warm != 0 && warm < 4) warm = 4;
+  if (cool != 0 && cool < 4) cool = 4;
+
+  lm3630aUpdate(0x00, 0x80, 0x00);  // leave software sleep
+  delay(2);
+  lm3630aWrite(0x03, warm);
+  lm3630aWrite(0x04, cool);
+  lm3630aUpdate(0x00, 0x04, warm >= 4 ? 0x04 : 0x00);
+  lm3630aUpdate(0x00, 0x02, cool >= 4 ? 0x02 : 0x00);
+}
+#endif
+
+#if FREEINK_DEVICE_PICCO
+// Onyx Picco frontlight: a dual-channel warm/cool I2C LED driver at 0x38 on the
+// shared I2C bus. Recovered from the retail firmware (Ghidra); standard 8-bit
+// sub-address register model:
+//   reg0  = master enable  (bit2/0x04 = cool on, bit1/0x02 = warm on; bit7 = standby, cleared on shutdown)
+//   reg1  = mode           (low 3 bits)         reg2 = 0x38 config      reg0x50 = 0x03
+//   reg3  = cool PWM        reg4 = warm PWM      reg5/6 = per-channel current limit (5-bit)
+// Ten brightness steps per warmth row, starting eight bytes after 0x3c78d4c4
+// in the vendor image. Each step holds cool/warm PWM followed by cool/warm current.
+// The final two warm-only steps extend the recovered ramp up to its warm PWM limit.
+namespace {
+constexpr uint8_t PICCO_FL_LUT[10][10][4] = {
+    {{1, 0, 24, 0},
+     {14, 0, 31, 0},
+     {34, 0, 31, 0},
+     {55, 0, 31, 0},
+     {75, 0, 31, 0},
+     {95, 0, 31, 0},
+     {116, 0, 31, 0},
+     {136, 0, 31, 0},
+     {157, 0, 31, 0},
+     {177, 0, 31, 0}},
+    {{1, 1, 19, 0},
+     {10, 3, 31, 1},
+     {30, 1, 31, 8},
+     {50, 1, 31, 19},
+     {71, 8, 31, 31},
+     {91, 28, 31, 31},
+     {112, 48, 31, 31},
+     {132, 69, 31, 31},
+     {152, 89, 31, 31},
+     {173, 110, 31, 31}},
+    {{1, 3, 17, 2},
+     {5, 1, 31, 10},
+     {25, 1, 31, 22},
+     {46, 12, 31, 31},
+     {66, 32, 31, 31},
+     {86, 53, 31, 31},
+     {107, 73, 31, 31},
+     {127, 94, 31, 31},
+     {148, 114, 31, 31},
+     {168, 134, 31, 31}},
+    {{1, 2, 14, 7},
+     {1, 1, 29, 18},
+     {20, 6, 31, 31},
+     {40, 27, 31, 31},
+     {61, 47, 31, 31},
+     {81, 67, 31, 31},
+     {101, 88, 31, 31},
+     {122, 108, 31, 31},
+     {142, 129, 31, 31},
+     {162, 149, 31, 31}},
+    {{2, 1, 10, 12},
+     {1, 1, 23, 26},
+     {13, 16, 31, 31},
+     {34, 37, 31, 31},
+     {54, 57, 31, 31},
+     {74, 78, 31, 31},
+     {95, 98, 31, 31},
+     {115, 118, 31, 31},
+     {136, 139, 31, 31},
+     {156, 159, 31, 31}},
+    {{1, 2, 7, 16},
+     {1, 4, 17, 31},
+     {5, 24, 31, 31},
+     {26, 45, 31, 31},
+     {46, 65, 31, 31},
+     {66, 86, 31, 31},
+     {87, 106, 31, 31},
+     {107, 126, 31, 31},
+     {128, 147, 31, 31},
+     {148, 167, 31, 31}},
+    {{3, 1, 3, 21},
+     {2, 11, 11, 31},
+     {1, 31, 25, 31},
+     {15, 51, 31, 31},
+     {36, 72, 31, 31},
+     {56, 92, 31, 31},
+     {76, 113, 31, 31},
+     {97, 133, 31, 31},
+     {117, 153, 31, 31},
+     {138, 174, 31, 31}},
+    {{2, 1, 0, 26},
+     {2, 16, 5, 31},
+     {2, 37, 14, 31},
+     {1, 57, 31, 31},
+     {21, 77, 31, 31},
+     {42, 98, 31, 31},
+     {62, 118, 31, 31},
+     {82, 138, 31, 31},
+     {103, 159, 31, 31},
+     {123, 179, 31, 31}},
+    {{1, 1, 0, 26},
+     {1, 21, 0, 31},
+     {1, 41, 4, 31},
+     {1, 62, 12, 31},
+     {1, 82, 26, 31},
+     {17, 102, 31, 31},
+     {37, 123, 31, 31},
+     {58, 143, 31, 31},
+     {78, 164, 31, 31},
+     {98, 184, 31, 31}},
+    {{0, 5, 0, 31},
+     {0, 25, 0, 31},
+     {0, 46, 0, 31},
+     {0, 66, 0, 31},
+     {0, 86, 0, 31},
+     {0, 107, 0, 31},
+     {0, 127, 0, 31},
+     {0, 147, 0, 31},
+     {0, 167, 0, 31},
+     {0, 184, 0, 31}},
+};
+}  // namespace
+
+bool FrontlightManager::piccoWrite(const uint8_t reg, const uint8_t value) {
+  const auto& cfg = BoardConfig::ACTIVE.i2cFrontlight;
+  Wire.beginTransmission(cfg.address);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool FrontlightManager::piccoUpdate(const uint8_t reg, const uint8_t mask, const uint8_t value) {
+  const auto& cfg = BoardConfig::ACTIVE.i2cFrontlight;
+  Wire.beginTransmission(cfg.address);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(cfg.address, static_cast<uint8_t>(1), static_cast<uint8_t>(true)) != 1) return false;
+  const uint8_t current = Wire.read();
+  return piccoWrite(reg, static_cast<uint8_t>((current & ~mask) | (value & mask)));
+}
+
+bool FrontlightManager::configurePicco() {
+  // The LM3630A-style controller needs time to leave software sleep before
+  // brightness/current writes (also used by the Linux lm3630a driver). Only
+  // pay this settling delay on the first on after boot/off, not slider ticks.
+  if (!piccoUpdate(0x00, 0x80, 0x00)) {
+    LOG_ERR("FrontlightMgr", "Picco frontlight wake failed");
+    return false;
+  }
+  delay(2);
+  // Recovered power-on sequence (FUN_42008cc4): filter/mode/config registers.
+  bool ok = piccoWrite(0x50, 0x03);
+  ok = piccoUpdate(0x01, 0x07, 0x00) && ok;
+  ok = piccoWrite(0x02, 0x38) && ok;
+  _i2cConfigured = ok;
+  if (!ok) LOG_ERR("FrontlightMgr", "Picco frontlight configuration failed");
+  return ok;
+}
+
+void FrontlightManager::applyPicco() {
+  if (_brightness == 0) {
+    // Off: clear both channel-enable bits, then set reg0 bit 7 (standby), as
+    // stock's sleep path FUN_42008f64 does. The on path clears it again.
+    piccoUpdate(0x00, 0x14, 0x00);
+    piccoUpdate(0x00, 0x0b, 0x00);
+    piccoUpdate(0x00, 0x80, 0x80);
+    _i2cConfigured = false;
+    return;
+  }
+  if (!_i2cConfigured && !configurePicco()) return;
+
+  // Spend more of the slider on low light, where a change is easiest to see.
+  const float brightness = (_brightness - 1) / 99.0f;
+  const float step = 9.0f * brightness * std::sqrt(brightness);
+  const float warmth = (9 * _warmPercent) / 100.0f;
+  const int b = step >= 9 ? 8 : static_cast<int>(step);
+  const int w = warmth >= 9 ? 8 : static_cast<int>(warmth);
+  const float bf = step - b;
+  const float wf = warmth - w;
+  const auto blend = [&](int field) {
+    const float lo = (1 - bf) * PICCO_FL_LUT[w][b][field] + bf * PICCO_FL_LUT[w][b + 1][field];
+    const float hi = (1 - bf) * PICCO_FL_LUT[w + 1][b][field] + bf * PICCO_FL_LUT[w + 1][b + 1][field];
+    return static_cast<uint8_t>((1 - wf) * lo + wf * hi + 0.5f);
+  };
+  // Both channels stay on (PWM >= 1) for warmth 1-99%; a channel switches off
+  // only at 0% (warm) or 100% (cool). Even PWM 1 / current 0 is visibly lit,
+  // so switching a channel off mid-slider, where its blended PWM rounds to 0,
+  // was a colour jump at every brightness (e.g. warmth 94->95%).
+  const bool coolOn = _warmPercent < 100;
+  const bool warmOn = _warmPercent > 0;
+  const uint8_t coolPwm = coolOn ? std::max<uint8_t>(blend(0), 1) : 0;
+  const uint8_t warmPwm = warmOn ? std::max<uint8_t>(blend(1), 1) : 0;
+  const uint8_t coolCur = coolOn ? blend(2) : 0;
+  const uint8_t warmCur = warmOn ? blend(3) : 0;
+
+  piccoWrite(0x03, coolPwm);  // cool brightness
+  piccoWrite(0x04, warmPwm);  // warm brightness
+  piccoUpdate(0x05, 0x1f, coolCur);
+  piccoUpdate(0x06, 0x1f, warmCur);
+  piccoUpdate(0x00, 0x14, coolPwm ? 0x04 : 0x00);  // cool channel enable
+  piccoUpdate(0x00, 0x0b, warmPwm ? 0x02 : 0x00);  // warm channel enable
+}
+#endif
+
+void FrontlightManager::apply() {
+  const auto& fl = BoardConfig::ACTIVE.frontlight;
+  if (!_begun) return;
+#if FREEINK_DEVICE_EEGO_A4
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::EegoA4 &&
+      BoardConfig::ACTIVE.i2cFrontlight.controller == BoardConfig::I2cFrontlightController::Lm3630a) {
+    applyLm3630a();
+    return;
+  }
+#endif
+#if FREEINK_DEVICE_PICCO
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::Picco &&
+      BoardConfig::ACTIVE.i2cFrontlight.controller == BoardConfig::I2cFrontlightController::PiccoDualLed) {
+    applyPicco();
+    return;
+  }
+#endif
+  if (fl.viaPm1Pwm) {
+    pm1FrontlightWrite(_brightness);
+    return;
+  }
+  if (fl.gpio == BoardConfig::PIN_UNASSIGNED) return;
+
+  const uint32_t full = maxDuty(fl.pwmResolutionBits);
+  const bool dual = fl.gpioWarm != BoardConfig::PIN_UNASSIGNED;
+
+  // Convert brightness to PWM precision BEFORE splitting it between channels.
+  // Splitting integer percentages first loses both fractional parts at low
+  // levels: brightness=1, warmth=50 previously became cool=0% + warm=0%.
+  // Splitting the total duty also keeps cool+warm equal to the requested total.
+  uint32_t totalDuty = 0;
+  if (_useLevel && _brightnessLevel > 0) {
+    const uint32_t n = static_cast<uint32_t>(_brightnessLevel - 1u);
+    totalDuty = 1u + (n * n * (full - 1u)) / (254u * 254u);
+  } else if (!_useLevel) {
+    totalDuty = perceptualDuty(_brightness, full);
+  }
+  // Boost-EN floor. On a light whose PWM gates a boost converter's EN pin, an
+  // on-time under the boost's start-up window produces NO light, so the dim end
+  // of any curve must land on the physical floor, not on one LSB -- that is how
+  // a plain gamma curve can black the light out at every ordinary reading
+  // brightness. Remap (0, full] onto [holdFloor, full]: the curve keeps its
+  // shape, 1% becomes the dimmest level the hardware can actually sustain, and
+  // boards with no floor configured are untouched (holdFloor == 0 leaves the
+  // identity mapping).
+  const uint32_t holdFloor = (full * fl.minHoldPermille + 500u) / 1000u;
+  if (totalDuty > 0 && holdFloor > 0) {
+    totalDuty = holdFloor + static_cast<uint32_t>((static_cast<uint64_t>(totalDuty) * (full - holdFloor)) / full);
+  }
+  uint32_t warmDuty = 0;
+  uint32_t coolDuty = totalDuty;
+  if (dual) {
+    warmDuty = (totalDuty * _warmPercent + 50u) / 100u;
+    coolDuty = totalDuty - warmDuty;
+  }
+#ifdef FREEINK_FRONTLIGHT_LS
+  updateLsKeepAlive(totalDuty != 0);
+#endif
+  // Kick-start: a boost sustains below the duty it can ignite from. Turning on
+  // from dark into the hold band gets a brief burst at the ignition floor, then
+  // settles to the target -- which is what lets minHoldPermille sit below
+  // minStartPermille and 1% reach a level the boost could never start at.
+  const uint32_t startFloor = (full * fl.minStartPermille + 500u) / 1000u;
+  if (_lastTotalDuty == 0 && totalDuty > 0 && startFloor > 0 && totalDuty < startFloor) {
+    const uint32_t kickWarm = dual ? (startFloor * _warmPercent + 50u) / 100u : 0;
+    writeChannel(fl.gpio, LEDC_CH_COOL, physicalDuty(startFloor - kickWarm, full, fl.activeHigh));
+    if (dual) {
+      writeChannel(fl.gpioWarm, LEDC_CH_WARM, physicalDuty(kickWarm, full, fl.activeHigh));
+    }
+    delay(30);  // one boost soft-start; the output cap carries the dip that follows
+  }
+  _lastTotalDuty = totalDuty;
+
+  writeChannel(fl.gpio, LEDC_CH_COOL, physicalDuty(coolDuty, full, fl.activeHigh));
+
+  if (dual) {
+    writeChannel(fl.gpioWarm, LEDC_CH_WARM, physicalDuty(warmDuty, full, fl.activeHigh));
+  }
+  LOG_INF("FrontlightMgr", "apply: brightness=%u level=%u totalDuty=%u coolDuty=%u warmDuty=%u lit=%d", _brightness,
+          _brightnessLevel, totalDuty, coolDuty, warmDuty, totalDuty != 0 ? 1 : 0);
+}
+
+#ifdef FREEINK_FRONTLIGHT_LS
+void FrontlightManager::updateLsKeepAlive(const bool lit) {
+  // Refcounted, so strictly transition-edged: one +1 while lit, returned at 0.
+  // Skipped when the attach failed (see begin()) — the driver never took its
+  // +1 there, and RC_FAST keep-alive is moot without a working LS channel.
+  if (!_lsAttachOk || lit == _lsKeepAliveArmed) return;
+  esp_sleep_sub_mode_config(ESP_SLEEP_DIG_USE_RC_FAST_MODE, lit);
+  _lsKeepAliveArmed = lit;
+}
+
+void FrontlightManager::park() {
+  // Frontlight leakage through deep sleep (Xteink X4 Pro — Mark31415,
+  // crosspoint-reader#3215). The channels are configured LEDC_SLEEP_MODE_KEEP_ALIVE
+  // so the PWM keeps driving GPIO8/9 (cool/warm) through light sleep; at deep
+  // sleep the panel rail is held up (PR #3215 holds power.latch0 / GPIO1 HIGH for
+  // fast-wake), so the frontlight driver IC stays powered and the KEEP_ALIVE pad
+  // keeps drawing quiescent + leakage current. Cut it at the source: drive both
+  // pads LOW (active-high frontlight -> LED off, no booster bias) and hold them
+  // LOW so the level survives deep sleep via gpio_deep_sleep_hold_en() (called by
+  // PowerManager::deepSleep()). The LEDC peripheral clock (RC_FAST) is also
+  // released so the driver's refcounted +1 is dropped and the clock can fully
+  // stop in deep sleep. releaseOnWake() must undo this before begin() re-attaches
+  // the LEDC channels on boot.
+  const auto& fl = BoardConfig::ACTIVE.frontlight;
+  if (!_begun) return;
+  LOG_INF("FrontlightMgr", "park: begun, driving pads LOW + hold");
+  // Return the LEDC driver's refcounted RC_FAST keep-alive it took at attach, if
+  // it is still armed (apply() re-arms only while lit; off()/setBrightness(0)
+  // returns it, but be safe if the light was parked while lit).
+  updateLsKeepAlive(false);
+  // Tear down the KEEP_ALIVE LEDC channels so the pads no longer answer to the
+  // peripheral; the explicit GPIO hold below then owns the pad level.
+  ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+  if (fl.gpioWarm != BoardConfig::PIN_UNASSIGNED) {
+    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+  }
+  for (const int8_t pin : {fl.gpio, fl.gpioWarm}) {
+    if (pin < 0) continue;
+    const auto g = static_cast<gpio_num_t>(pin);
+    // Release any surviving pad hold first: a held pad silently ignores the drive
+    // below (same trap as HalPowerManager's latch loop).
+    gpio_hold_dis(g);
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+    gpio_hold_en(g);
+    _lsParked = true;
+  }
+}
+
+void FrontlightManager::releaseOnWake() {
+  // Undo park() so begin() can re-attach the LEDC channels cleanly: drop the pad
+  // holds (a held pad would make ledc_channel_config()'s drive a no-op) and clear
+  // the parked flag. Called from the consumer at boot, before Frontlight.begin().
+  //
+  // CRITICAL: the release must be UNCONDITIONAL. park() latches a digital pad hold
+  // (gpio_hold_en) that survives deep sleep AND the wake reset, but _lsParked is a
+  // plain DRAM flag that is lost on the same reset. After a wake, _lsParked is
+  // always false even though the pad is still held — gating the release on it would
+  // leave the pad held forever (light dark until power-cycle). gpio_hold_dis on a
+  // non-held pad is a harmless no-op, so releasing unconditionally is safe and
+  // idempotent. Every other driver in this codebase releases holds unconditionally
+  // before driving for exactly this reason.
+  const auto& fl = BoardConfig::ACTIVE.frontlight;
+  for (const int8_t pin : {fl.gpio, fl.gpioWarm}) {
+    if (pin < 0) continue;
+    gpio_hold_dis(static_cast<gpio_num_t>(pin));
+  }
+  _lsParked = false;
+  LOG_INF("FrontlightMgr", "releaseOnWake: cleared pad holds (unconditional)");
+}
+#endif
+#endif
+
+void FrontlightManager::setBrightness(uint8_t percent) {
+#if FREEINK_CAP_FRONTLIGHT
+  if (percent > 100) percent = 100;
+  _brightness = percent;
+  _brightnessLevel = (static_cast<uint16_t>(percent) * 255u) / 100u;
+  _useLevel = false;
+  if (percent > 0) _lastBrightness = percent;
+  apply();
+#else
+  (void)percent;
+#endif
+}
+
+void FrontlightManager::setBrightnessLevel(uint8_t level) {
+#if FREEINK_CAP_FRONTLIGHT
+  _brightnessLevel = level;
+  _brightness = (static_cast<uint16_t>(level) * 100u) / 255u;
+  if (level && !_brightness) _brightness = 1;  // backends treat 0% as off
+  _useLevel = true;
+  apply();
+#else
+  (void)level;
+#endif
+}
+
+void FrontlightManager::prepareForDeepSleep() {
+#if FREEINK_CAP_FRONTLIGHT
+  const auto& fl = BoardConfig::ACTIVE.frontlight;
+  if (fl.viaPm1Pwm) {
+    // Paper Mono: the PWM lives in the M5PM1, so there is no ESP pad to park.
+    // Zero the duty (clearing the channel-enable bit) so the AW9967 is dark even
+    // if the EPD rail feeding it is still up when we sleep.
+    if (_begun) pm1FrontlightWrite(0);
+    return;
+  }
+  parkPinForSleep(fl.gpio, LEDC_CH_COOL, fl.activeHigh);
+  parkPinForSleep(fl.gpioWarm, LEDC_CH_WARM, fl.activeHigh);
+#endif
+}
+
+void FrontlightManager::off() { setBrightness(0); }
+void FrontlightManager::on() { setBrightness(_lastBrightness); }
+
+void FrontlightManager::setColorTemperature(uint8_t warmPercent) {
+#if FREEINK_CAP_FRONTLIGHT
+  _warmPercent = warmPercent > 100 ? 100 : warmPercent;
+  // Only re-drives hardware when a warm channel exists; on single-channel boards this just
+  // records the request (apply() ignores _warmPercent without a second channel).
+  apply();
+#else
+  (void)warmPercent;
+#endif
+}
